@@ -13,7 +13,7 @@
     nixpkgs.url = "nixpkgs/nixos-unstable";
   };
 
-  outputs = { self, fenix, naersk, flake-utils, nixpkgs }: {
+  outputs = { self, fenix, naersk, flake-utils, nixpkgs }:
     flake-utils.lib.eachDefaultSystem (system: {
       defaultPackage =
         let
@@ -34,5 +34,4 @@
           CARGO_BUILD_TARGET = target;
         };
     });
-  };
 }
