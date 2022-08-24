@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+
+mod ccd_codec;
+
 use std::{time::Duration, str::FromStr};
 
 use clap::{Parser, Subcommand, Args};

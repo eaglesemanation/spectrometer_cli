@@ -640,9 +640,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "spectrometer-scan"
+name = "spectrometer_cli"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "clap",
  "parse_duration",
  "tokio",
