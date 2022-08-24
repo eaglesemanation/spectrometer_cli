@@ -1,9 +1,18 @@
 [package]
-name = "spectrometer-scan"
+name = "spectrometer_cli"
 version = "0.1.0"
 edition = "2021"
+
+[profile.release]
+opt-level = "s" # Optimize for size
+#strip = true # Strip debug symbols
+lto = true # Link time optimization
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 clap = { version = "3.2.17", features = ["derive"] }
+parse_duration = "2.1.1"
+tokio = { version = "1.20.1", features = ["full"] }
+tokio-serial = "5.4.3"
+tokio-util = { version = "0.7.3", features = ["full"] }
