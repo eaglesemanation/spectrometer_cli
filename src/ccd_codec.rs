@@ -61,6 +61,7 @@ const POST_PADDING: usize = 8;
 const PIXEL_COUNT: usize = PRE_PADDING + FRAME_SIZE + POST_PADDING;
 const CRC_SIZE: usize = 2;
 
+
 impl Encoder<Command> for CCDCodec {
     type Error = io::Error;
 
@@ -110,9 +111,11 @@ impl FromStr for VersionDetails {
     }
 }
 
+pub type Frame = [u16; FRAME_SIZE];
+
 #[derive(PartialEq, Eq, Debug)]
 pub enum Response {
-    SingleReading([u16; FRAME_SIZE]),
+    SingleReading(Frame),
     ExposureTime(u16),
     AverageTime(u8),
     SerialBaudRate(BaudRate),
