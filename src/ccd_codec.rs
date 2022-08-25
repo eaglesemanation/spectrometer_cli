@@ -1,5 +1,8 @@
 use bytes::{Buf, BytesMut};
-use std::{io, str::{from_utf8, FromStr}};
+use std::{
+    io,
+    str::{from_utf8, FromStr},
+};
 use tokio_util::codec::{Decoder, Encoder};
 
 pub struct CCDCodec;
@@ -52,6 +55,10 @@ fn command_code(cmd: &Command) -> u8 {
 }
 
 const HEAD_SIZE: usize = 5;
+const FRAME_SIZE: usize = 2048; // Amount of effective pixels
+const PRE_PADDING: usize = 32;
+const POST_PADDING: usize = 8;
+const PIXEL_COUNT: usize = PRE_PADDING + FRAME_SIZE + POST_PADDING;
 const CRC_SIZE: usize = 2;
 
 impl Encoder<Command> for CCDCodec {
@@ -89,9 +96,12 @@ impl FromStr for VersionDetails {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.split(", ").collect();
         if parts.len() != 4 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid format of version information"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid format of version information",
+            ));
         }
-        Ok(VersionDetails{
+        Ok(VersionDetails {
             hardware_version: parts[0].to_string(),
             sensor_type: parts[1].to_string(),
             firmware_version: parts[2].to_string(),
@@ -102,11 +112,66 @@ impl FromStr for VersionDetails {
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum Response {
-    SingleRead,
+    SingleReading([u16; FRAME_SIZE]),
     ExposureTime(u16),
     AverageTime(u8),
     SerialBaudRate(BaudRate),
     VersionInfo(VersionDetails),
+}
+
+fn pair_u8_to_u16(upper: u8, lower: u8) -> u16 {
+    ((upper as u16) << 8) | (lower as u16)
+}
+
+impl CCDCodec {
+    fn decode_version_info(&mut self, src: &mut BytesMut) -> Result<Option<Response>, io::Error> {
+        let line = src.clone();
+        if let Some(idx) = line.iter().position(|b| *b == '\n' as u8) {
+            let version_info = from_utf8(&line[..idx])
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+                .and_then(|s| VersionDetails::from_str(s))?;
+            src.advance(idx + 1);
+            return Ok(Some(Response::VersionInfo(version_info)));
+        }
+        if let Some(idx) = line.iter().position(|b| *b == 0x81) {
+            // Align buffer with the first recieved message
+            src.advance(idx);
+            return Ok(None);
+        }
+        if src.len() < 64 {
+            // Let buffer fill a bit before deciding that it's garbage
+            return Ok(None);
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Could not find a structured response",
+        ));
+    }
+
+    fn decode_frame(&mut self, src: &mut BytesMut) -> Result<Option<Response>, io::Error> {
+        let package_size = HEAD_SIZE + PIXEL_COUNT * 2 + CRC_SIZE;
+        if src.len() < package_size {
+            if src.capacity() < package_size {
+                // Preallocate space for a frame
+                src.reserve(package_size - src.len())
+            }
+            Ok(None)
+        } else {
+            let scan = &src[HEAD_SIZE..package_size - CRC_SIZE];
+            let crc = scan.iter().fold(0u16, |accum, val| accum.wrapping_add(*val as u16));
+            let expected_crc = pair_u8_to_u16(src[package_size - 2], src[package_size - 1]);
+            if crc != expected_crc {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("Invalid CRC, expected {}, got {}", expected_crc, crc)));
+            }
+            let frame = scan[PRE_PADDING * 2..(PRE_PADDING + FRAME_SIZE) * 2]
+                .chunks_exact(2)
+                .map(|b| pair_u8_to_u16(b[0], b[1]))
+                .collect::<Vec<u16>>().try_into().unwrap();
+
+            src.advance(package_size);
+            Ok(Some(Response::SingleReading(frame)))
+        }
+    }
 }
 
 impl Decoder for CCDCodec {
@@ -127,99 +192,69 @@ impl Decoder for CCDCodec {
 
         // Return without a header, probably version info
         if head[0] != 0x81 {
-            if let Some(idx) = src.clone().into_iter().position(|b| b == '\n' as u8) {
-                let mut buf = Vec::new();
-                buf.extend_from_slice(&src[..idx]);
-                let version_info = from_utf8(&buf)
-                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
-                    .and_then(|s| VersionDetails::from_str(s))?;
-                src.advance(idx + 1);
-                return Ok(Some(VersionInfo(version_info)));
-            }
-            if let Some(idx) = src.clone().into_iter().position(|b| b == 0x81) {
-                // Align buffer with the first recieved message
-                src.advance(idx);
-                return Ok(None);
-            }
-            if src.len() < 64 {
-                // Let buffer fill a bit before deciding that it's garbage
-                return Ok(None);
-            }
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Could not find a structured response",
-            ));
+            return self.decode_version_info(src);
         }
 
         // Header should be present, either 5 byte command, or 4200 byte scan of ccd pixels
-        let (result, advance_size) = match head[1] {
+        match head[1] {
+            // SingleReading
             0x01 => {
-                let scan_size: usize = (((head[2] as u16) << 8) | (head[3] as u16)).into();
-                let package_size = HEAD_SIZE + scan_size + CRC_SIZE;
-                if src.len() < package_size {
-                    if src.capacity() < package_size {
-                        // Preallocate space for a frame
-                        src.reserve(package_size - src.len())
-                    }
-                    // Reading is not complete
-                    (Ok(None), 0)
+                let scan_size: usize = pair_u8_to_u16(head[2], head[3]).into();
+                if (scan_size == 0 || scan_size == PIXEL_COUNT * 2) && head[4] == 0x00 {
+                    self.decode_frame(src)
                 } else {
-                    // TODO: Check CRC and form a response
-                    todo!();
+                    Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Unexpected scan size",
+                    ))
                 }
             }
+            // ExposureTime
             0x02 => {
-                let exp_t = ((head[2] as u16) << 8) | (head[3] as u16);
+                src.advance(HEAD_SIZE);
+                let exp_t = pair_u8_to_u16(head[2], head[3]);
                 match head[4] {
-                    0xff => (Ok(Some(ExposureTime(exp_t))), HEAD_SIZE),
-                    _ => (
-                        Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "Unexpected end of package",
-                        )),
-                        HEAD_SIZE,
-                    ),
+                    0xff => Ok(Some(ExposureTime(exp_t))),
+                    _ => Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Unexpected end of package",
+                    )),
                 }
             }
+            // AverageTime
             0x0e => {
+                src.advance(HEAD_SIZE);
                 let avg_t = head[2];
                 match (head[3], head[4]) {
-                    (0x00, 0xff) => (Ok(Some(AverageTime(avg_t))), HEAD_SIZE),
-                    _ => (
-                        Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "Unexpected end of package",
-                        )),
-                        HEAD_SIZE,
-                    ),
+                    (0x00, 0xff) => Ok(Some(AverageTime(avg_t))),
+                    _ => Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Unexpected end of package",
+                    )),
                 }
             }
+            // SerialBaudRate
             0x16 => {
+                src.advance(HEAD_SIZE);
                 let baud_rate = head[2];
-                (
-                    match baud_rate {
-                        1 => Ok(Some(SerialBaudRate(Baud115200))),
-                        2 => Ok(Some(SerialBaudRate(Baud384000))),
-                        3 => Ok(Some(SerialBaudRate(Baud921600))),
-                        _ => Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "Unexpected baud rate reported",
-                        )),
-                    },
-                    HEAD_SIZE,
-                )
+                match baud_rate {
+                    1 => Ok(Some(SerialBaudRate(Baud115200))),
+                    2 => Ok(Some(SerialBaudRate(Baud384000))),
+                    3 => Ok(Some(SerialBaudRate(Baud921600))),
+                    _ => Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Unexpected baud rate reported",
+                    )),
+                }
             }
-            _ => (
+            _ => {
+                src.advance(HEAD_SIZE);
                 Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "Unexpected command code for return value",
-                )),
-                HEAD_SIZE,
-            ),
-        };
-        src.advance(advance_size);
-
-        result
+                ))
+            }
+        }
     }
 }
 
@@ -249,12 +284,36 @@ mod tests {
 
         assert_eq!(
             res,
-            Response::VersionInfo(VersionDetails{
+            Response::VersionInfo(VersionDetails {
                 hardware_version: "LCAM_V8.4.2".to_string(),
-                sensor_type: "S11639".to_string(), 
-                firmware_version: "V4.2".to_string(), 
+                sensor_type: "S11639".to_string(),
+                firmware_version: "V4.2".to_string(),
                 serial_number: "202111161548".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn singlereading_decoding() {
+        let mut codec = CCDCodec {};
+        let mut src = BytesMut::with_capacity(0);
+        let [len_upper, len_lower] = ((PIXEL_COUNT * 2) as u16).to_be_bytes();
+        // Head
+        src.extend_from_slice(&[0x81, 0x01, len_upper, len_lower, 0x00]);
+        // Prefix dummy pixels
+        src.extend_from_slice(&[0u8; PRE_PADDING * 2]);
+        // Actual data, use 16 for CRC overflow behaviour check
+        src.extend_from_slice(&[16u8; FRAME_SIZE * 2]);
+        // Postfix dummy pixels
+        src.extend_from_slice(&[0u8; POST_PADDING * 2]);
+        // CRC
+        src.extend_from_slice(&(0 as u16).to_be_bytes());
+
+        let res = codec.decode(&mut src).unwrap().unwrap();
+
+        assert_eq!(
+            res,
+            Response::SingleReading([pair_u8_to_u16(16u8, 16u8); FRAME_SIZE])
+        )
     }
 }
