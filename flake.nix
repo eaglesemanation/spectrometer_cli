@@ -1,5 +1,4 @@
 {
-
   inputs = {
     fenix = {
       url = "github:nix-community/fenix";
@@ -14,24 +13,35 @@
   };
 
   outputs = { self, fenix, naersk, flake-utils, nixpkgs }:
-    flake-utils.lib.eachDefaultSystem (system: {
-      defaultPackage =
-        let
-          pkgs = nixpkgs.legacePackages.${system};
-          target = "x86_64-unknown-linux-musl";
-          toolchain = with fenix.packages.${system};
-            combine [
-              minimal.rustc
-              minimal.cargo
-              targets.${target}.latest.rust-std
-            ];
-        in
-        (naersk.lib.${system}.override {
+    flake-utils.lib.eachDefaultSystem (system:
+      let
+        pkgs = nixpkgs.legacyPackages.${system};
+
+        # Cross-compilation targets
+        buildTargets = import ./targets.nix {inherit pkgs;};
+        cargoTargets = buildTargets.cargoTargets;
+        systemToTarget = buildTargets.systemToTarget;
+
+        toolchain = with fenix.packages.${system};
+          combine ([
+            minimal.rustc
+            minimal.cargo
+          ] ++ builtins.map (cargoTarget: targets.${cargoTarget}.latest.rust-std) (builtins.attrNames cargoTargets));
+
+        naersk' = naersk.lib.${system}.override {
           cargo = toolchain;
           rustc = toolchain;
-        }).buildPackage {
-          src = ./.;
-          CARGO_BUILD_TARGET = target;
         };
-    });
+
+        naerskBuildPackage = target: args:
+          naersk'.buildPackage (
+            args
+            // { CARGO_BUILD_TARGET = target; }
+          );
+      in
+      rec {
+        defaultPackage = packages.${systemToTarget.${system}};
+        packages = builtins.mapAttrs naerskBuildPackage cargoTargets;
+      }
+    );
 }
