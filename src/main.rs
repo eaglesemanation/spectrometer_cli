@@ -2,12 +2,16 @@
 mod ccd_codec;
 
 use clap::{Args, Parser, Subcommand};
+use color_eyre::{
+    eyre::{eyre, WrapErr},
+    Result,
+};
+use colored::*;
 use futures::{sink::SinkExt, stream::StreamExt};
-use std::{time::Duration, path::Path};
+use std::{path::Path, time::Duration};
 use tokio::time::sleep;
 use tokio_serial::{available_ports, SerialPortBuilderExt, SerialPortInfo};
 use tokio_util::codec::Decoder;
-use color_eyre::{Result, eyre::{eyre, WrapErr}};
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -49,13 +53,22 @@ async fn main() -> Result<()> {
 
 #[cfg(target_os = "linux")]
 fn port_to_path(port: &SerialPortInfo) -> Result<String> {
-    let dev_path = port.port_name.split('/').last().map(|d| format!("/dev/{}", d)).ok_or(eyre!("Could not map /sys/class/tty to /dev"))?;
+    let dev_path = port
+        .port_name
+        .split('/')
+        .last()
+        .map(|d| format!("/dev/{}", d))
+        .ok_or(eyre!("Could not map /sys/class/tty to /dev"))?;
     if Path::new(dev_path.as_str()).exists() {
         Ok(dev_path)
     } else {
         // It's quite possibe that udev can rename tty devices while mapping from /sys to /dev, but
         // I just don't want to link against libudev, this is supposed to be a small static project
-        Err(eyre!("Could not find port {}, even though {} exists", dev_path, port.port_name))
+        Err(eyre!(
+            "Could not find port {}, even though {} exists",
+            dev_path,
+            port.port_name
+        ))
     }
 }
 
@@ -64,10 +77,26 @@ fn port_to_path(port: &SerialPortInfo) -> Result<String> {
     Ok(port.port_name.clone())
 }
 
-fn list_serial() -> Result<()> {
+fn get_port_paths() -> Result<Vec<String>> {
     let ports = available_ports()?;
-    let paths = ports.iter().map(port_to_path).collect::<Result<Vec<_>, _>>()?;
-    paths.iter().for_each(|p| println!("{}", p));
+    ports
+        .iter()
+        .map(port_to_path)
+        .filter(|path_res| match path_res {
+            Ok(path) => !path.is_empty(),
+            Err(_) => false
+        })
+        .collect()
+}
+
+fn list_serial() -> Result<()> {
+    let paths = get_port_paths()?;
+    if paths.is_empty() {
+        println!("{}", "No connected serial ports found.".red())
+    } else {
+        println!("{}", "Connected serial ports:".green());
+        paths.iter().for_each(|p| println!("{}", p));
+    }
 
     Ok(())
 }
