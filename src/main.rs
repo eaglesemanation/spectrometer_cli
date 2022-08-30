@@ -3,10 +3,11 @@ mod ccd_codec;
 
 use clap::{Args, Parser, Subcommand};
 use futures::{sink::SinkExt, stream::StreamExt};
-use std::{io, time::Duration};
+use std::{time::Duration, path::Path};
 use tokio::time::sleep;
-use tokio_serial::{available_ports, SerialPortBuilderExt};
+use tokio_serial::{available_ports, SerialPortBuilderExt, SerialPortInfo};
 use tokio_util::codec::Decoder;
+use color_eyre::{Result, eyre::{eyre, WrapErr}};
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -26,41 +27,61 @@ enum Commands {
 #[derive(Args)]
 struct ReadingConf {
     /// Name of serial port that should be used
+    #[clap(short, long, value_parser)]
     serial: String,
-    /// Duration for which frames are continiously captured
+    /// Duration in seconds for which frames are continiously captured
+    #[clap(short, long, value_parser, default_value = "3")]
     duration: u8,
+    /// Path to a file where readings should be stored
+    #[clap(short, long, value_parser, value_hint = clap::ValueHint::FilePath)]
+    output: String,
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::List => list_serial().expect("Getting list of serial ports failed"),
-        Commands::Read(conf) => get_readings(conf)
-            .await
-            .expect("Reading from serial failed"),
+        Commands::List => list_serial(),
+        Commands::Read(conf) => get_readings(conf).await,
     }
 }
 
-fn list_serial() -> Result<(), io::Error> {
+#[cfg(target_os = "linux")]
+fn port_to_path(port: &SerialPortInfo) -> Result<String> {
+    let dev_path = port.port_name.split('/').last().map(|d| format!("/dev/{}", d)).ok_or(eyre!("Could not map /sys/class/tty to /dev"))?;
+    if Path::new(dev_path.as_str()).exists() {
+        Ok(dev_path)
+    } else {
+        // It's quite possibe that udev can rename tty devices while mapping from /sys to /dev, but
+        // I just don't want to link against libudev, this is supposed to be a small static project
+        Err(eyre!("Could not find port {}, even though {} exists", dev_path, port.port_name))
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn port_to_path(port: &SerialPortInfo) -> Result<String> {
+    Ok(port.port_name.clone())
+}
+
+fn list_serial() -> Result<()> {
     let ports = available_ports()?;
-    ports.iter().for_each(|port| println!("{}", port.port_name));
+    let paths = ports.iter().map(port_to_path).collect::<Result<Vec<_>, _>>()?;
+    paths.iter().for_each(|p| println!("{}", p));
 
     Ok(())
 }
 
-async fn get_readings(conf: &ReadingConf) -> Result<(), io::Error> {
+async fn get_readings(conf: &ReadingConf) -> Result<()> {
     let mut frames: Vec<_> = Vec::new();
     let timeout = sleep(Duration::from_secs(conf.duration.into()));
     tokio::pin!(timeout);
 
     // TODO: Dynamically change baudrate
-    let port = tokio_serial::new(conf.serial.clone(), 115200).open_native_async()?;
-    /*
+    let mut port = tokio_serial::new(conf.serial.clone(), 115200).open_native_async()?;
+
     #[cfg(unix)]
     port.set_exclusive(false)?;
-    */
 
     let mut ccd = ccd_codec::CCDCodec.framed(port);
     ccd.send(ccd_codec::Command::ContinuousRead).await?;
@@ -72,10 +93,10 @@ async fn get_readings(conf: &ReadingConf) -> Result<(), io::Error> {
                         frames.push(frame);
                     }
                     Some(Ok(_)) => {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, "Got unexpected response while waiting for readings"));
+                        return Err(eyre!("Got unexpected response while waiting for readings"));
                     }
-                    Some(Err(err)) => {
-                        return Err(err);
+                    Some(err) => {
+                        return err.map(|_| ()).wrap_err("Unexpected end of serial port stream");
                     }
                     None => {}
                 }
