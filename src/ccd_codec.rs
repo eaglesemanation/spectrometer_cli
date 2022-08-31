@@ -85,10 +85,10 @@ impl Encoder<Command> for CCDCodec {
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct VersionDetails {
-    hardware_version: String,
-    sensor_type: String,
-    firmware_version: String,
-    serial_number: String,
+    pub hardware_version: String,
+    pub sensor_type: String,
+    pub firmware_version: String,
+    pub serial_number: String,
 }
 
 impl FromStr for VersionDetails {

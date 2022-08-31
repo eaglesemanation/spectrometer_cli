@@ -10,8 +10,10 @@ use colored::*;
 use futures::{sink::SinkExt, stream::StreamExt};
 use std::{path::Path, time::Duration};
 use tokio::time::sleep;
-use tokio_serial::{available_ports, SerialPortBuilderExt, SerialPortInfo};
-use tokio_util::codec::Decoder;
+use tokio_serial::{available_ports, SerialPortBuilderExt, SerialPortInfo, SerialStream};
+use tokio_util::codec::{Decoder, Framed};
+
+use ccd_codec::{CCDCodec, Command as CCDCommand, Response as CCDResponse};
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -24,21 +26,30 @@ struct Cli {
 enum Commands {
     /// Lists connected serial devices
     List,
+    /// Get version info from CCD
+    CCDVersion(SerialConf),
     /// Gets readings from spectrometer
     Read(ReadingConf),
 }
 
 #[derive(Args)]
-struct ReadingConf {
+struct SerialConf {
     /// Name of serial port that should be used
     #[clap(short, long, value_parser)]
     serial: String,
+}
+
+#[derive(Args)]
+struct ReadingConf {
     /// Duration in seconds for which frames are continiously captured
     #[clap(short, long, value_parser, default_value = "3")]
     duration: u8,
     /// Path to a file where readings should be stored
     #[clap(short, long, value_parser, value_hint = clap::ValueHint::FilePath)]
     output: String,
+
+    #[clap(flatten)]
+    serial: SerialConf,
 }
 
 #[tokio::main]
@@ -47,6 +58,7 @@ async fn main() -> Result<()> {
 
     match &cli.command {
         Commands::List => list_serial(),
+        Commands::CCDVersion(conf) => get_version(conf).await,
         Commands::Read(conf) => get_readings(conf).await,
     }
 }
@@ -101,24 +113,30 @@ fn list_serial() -> Result<()> {
     Ok(())
 }
 
-async fn get_readings(conf: &ReadingConf) -> Result<()> {
-    let mut frames: Vec<_> = Vec::new();
-    let timeout = sleep(Duration::from_secs(conf.duration.into()));
-    tokio::pin!(timeout);
-
+fn open_ccd_connection(conf: &SerialConf) -> Result<Framed<SerialStream, CCDCodec>> {
     // TODO: Dynamically change baudrate
     let mut port = tokio_serial::new(conf.serial.clone(), 115200).open_native_async()?;
 
     #[cfg(unix)]
     port.set_exclusive(false)?;
 
-    let mut ccd = ccd_codec::CCDCodec.framed(port);
-    ccd.send(ccd_codec::Command::ContinuousRead).await?;
+    Ok(ccd_codec::CCDCodec.framed(port))
+}
+
+
+async fn get_readings(conf: &ReadingConf) -> Result<()> {
+    let mut frames: Vec<_> = Vec::new();
+    let timeout = sleep(Duration::from_secs(conf.duration.into()));
+    tokio::pin!(timeout);
+
+    let mut ccd = open_ccd_connection(&conf.serial)?;
+
+    ccd.send(CCDCommand::ContinuousRead).await?;
     loop {
         tokio::select! {
             resp = ccd.next() => {
                 match resp {
-                    Some(Ok(ccd_codec::Response::SingleReading(frame))) => {
+                    Some(Ok(CCDResponse::SingleReading(frame))) => {
                         frames.push(frame);
                     }
                     Some(Ok(_)) => {
@@ -135,7 +153,30 @@ async fn get_readings(conf: &ReadingConf) -> Result<()> {
             }
         }
     }
-    ccd.send(ccd_codec::Command::PauseRead).await?;
+    ccd.send(CCDCommand::PauseRead).await?;
+
+    Ok(())
+}
+
+async fn get_version(conf: &SerialConf) -> Result<()> {
+    let mut ccd = open_ccd_connection(&conf)?;
+
+    ccd.send(CCDCommand::GetVersion).await?;
+    match ccd.next().await {
+        Some(Ok(CCDResponse::VersionInfo(info))) => {
+            println!("Hardware version: {}", info.hardware_version);
+            println!("Firmware version: {}", info.firmware_version);
+            println!("Sensor type: {}", info.sensor_type);
+            println!("Serial number: {}", info.serial_number)
+        },
+        Some(Ok(_)) => {
+            return Err(eyre!("Got unexpected response for sent command"));
+        }
+        Some(err) => {
+            return err.map(|_| ()).wrap_err("Unexpected end of serial port stream");
+        }
+        None => {}
+    };
 
     Ok(())
 }
