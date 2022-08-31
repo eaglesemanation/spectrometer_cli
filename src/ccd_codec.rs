@@ -261,6 +261,24 @@ impl Decoder for CCDCodec {
     }
 }
 
+/// Use a handler on a response from CCD codec only if resp matches resp_type
+/// TODO: Add an example of this macro usage
+macro_rules! handle_ccd_response {
+    ($resp:expr, $resp_type:path, $handler:expr) => {
+        match $resp {
+            Some(Ok($resp_type(val))) => {
+                Ok($handler(val))
+            }
+            Some(Ok(_)) => {
+                Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Got unexpected type of response"))
+            }
+            Some(Err(err)) => { Err(err) }
+            None => { Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "No response found")) }
+        }
+    };
+}
+pub(crate) use handle_ccd_response;
+
 #[cfg(test)]
 mod tests {
     use super::*;

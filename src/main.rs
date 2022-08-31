@@ -3,7 +3,7 @@ mod ccd_codec;
 
 use clap::{Args, Parser, Subcommand};
 use color_eyre::{
-    eyre::{eyre, WrapErr},
+    eyre::eyre,
     Result,
 };
 use colored::*;
@@ -13,7 +13,7 @@ use tokio::time::sleep;
 use tokio_serial::{available_ports, SerialPortBuilderExt, SerialPortInfo, SerialStream};
 use tokio_util::codec::{Decoder, Framed};
 
-use ccd_codec::{CCDCodec, Command as CCDCommand, Response as CCDResponse};
+use ccd_codec::{handle_ccd_response, CCDCodec, Command as CCDCommand, Response as CCDResponse};
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -96,7 +96,7 @@ fn get_port_paths() -> Result<Vec<String>> {
         .map(port_to_path)
         .filter(|path_res| match path_res {
             Ok(path) => !path.is_empty(),
-            Err(_) => false
+            Err(_) => false,
         })
         .collect()
 }
@@ -123,7 +123,6 @@ fn open_ccd_connection(conf: &SerialConf) -> Result<Framed<SerialStream, CCDCode
     Ok(ccd_codec::CCDCodec.framed(port))
 }
 
-
 async fn get_readings(conf: &ReadingConf) -> Result<()> {
     let mut frames: Vec<_> = Vec::new();
     let timeout = sleep(Duration::from_secs(conf.duration.into()));
@@ -135,18 +134,10 @@ async fn get_readings(conf: &ReadingConf) -> Result<()> {
     loop {
         tokio::select! {
             resp = ccd.next() => {
-                match resp {
-                    Some(Ok(CCDResponse::SingleReading(frame))) => {
-                        frames.push(frame);
-                    }
-                    Some(Ok(_)) => {
-                        return Err(eyre!("Got unexpected response while waiting for readings"));
-                    }
-                    Some(err) => {
-                        return err.map(|_| ()).wrap_err("Unexpected end of serial port stream");
-                    }
-                    None => {}
-                }
+                handle_ccd_response!(
+                    resp, CCDResponse::SingleReading,
+                    |frame: ccd_codec::Frame| {frames.push(frame)}
+                )?;
             },
             _ = &mut timeout => {
                 break;
@@ -162,21 +153,16 @@ async fn get_version(conf: &SerialConf) -> Result<()> {
     let mut ccd = open_ccd_connection(&conf)?;
 
     ccd.send(CCDCommand::GetVersion).await?;
-    match ccd.next().await {
-        Some(Ok(CCDResponse::VersionInfo(info))) => {
+    handle_ccd_response!(
+        ccd.next().await,
+        CCDResponse::VersionInfo,
+        |info: ccd_codec::VersionDetails| {
             println!("Hardware version: {}", info.hardware_version);
             println!("Firmware version: {}", info.firmware_version);
             println!("Sensor type: {}", info.sensor_type);
-            println!("Serial number: {}", info.serial_number)
-        },
-        Some(Ok(_)) => {
-            return Err(eyre!("Got unexpected response for sent command"));
+            println!("Serial number: {}", info.serial_number);
         }
-        Some(err) => {
-            return err.map(|_| ()).wrap_err("Unexpected end of serial port stream");
-        }
-        None => {}
-    };
+    )?;
 
     Ok(())
 }
