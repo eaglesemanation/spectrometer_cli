@@ -9,7 +9,7 @@ use color_eyre::{
 use colored::*;
 use futures::{sink::SinkExt, stream::StreamExt};
 use std::{path::Path, time::Duration};
-use tokio::time::sleep;
+use tokio::{time::sleep, fs::File, io::AsyncWriteExt};
 use tokio_serial::{available_ports, SerialPortBuilderExt, SerialPortInfo, SerialStream};
 use tokio_util::codec::{Decoder, Framed};
 
@@ -145,6 +145,11 @@ async fn get_readings(conf: &ReadingConf) -> Result<()> {
         }
     }
     ccd.send(CCDCommand::PauseRead).await?;
+
+    let mut out = File::open(&conf.output).await?;
+    for frame in frames {
+        out.write(format!("{:#?}", frame).as_bytes()).await?;
+    }
 
     Ok(())
 }
