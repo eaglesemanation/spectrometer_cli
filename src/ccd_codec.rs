@@ -1,4 +1,6 @@
 use bytes::{Buf, BytesMut};
+use lazy_static::lazy_static;
+use regex::Regex;
 use std::{
     io,
     str::{from_utf8, FromStr},
@@ -61,7 +63,6 @@ const POST_PADDING: usize = 8;
 const PIXEL_COUNT: usize = PRE_PADDING + FRAME_SIZE + POST_PADDING;
 const CRC_SIZE: usize = 2;
 
-
 impl Encoder<Command> for CCDCodec {
     type Error = io::Error;
 
@@ -95,7 +96,7 @@ impl FromStr for VersionDetails {
     type Err = io::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split(", ").collect();
+        let parts: Vec<&str> = s.split(",").collect();
         if parts.len() != 4 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -128,15 +129,21 @@ fn pair_u8_to_u16(upper: u8, lower: u8) -> u16 {
 
 impl CCDCodec {
     fn decode_version_info(&mut self, src: &mut BytesMut) -> Result<Option<Response>, io::Error> {
-        let line = src.clone();
-        if let Some(idx) = line.iter().position(|b| *b == '\n' as u8) {
-            let version_info = from_utf8(&line[..idx])
-                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
-                .and_then(|s| VersionDetails::from_str(s))?;
-            src.advance(idx + 1);
+        lazy_static! {
+            static ref VERSION_INFO_RE: Regex = Regex::new(r"^HdInfo:((?:.*,){3}\d{12})").unwrap();
+        }
+        if let Some(caps) = VERSION_INFO_RE.captures(from_utf8(src).unwrap_or("")) {
+            let version_info = caps
+                .get(1)
+                .ok_or(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Could not parse version info",
+                ))
+                .and_then(|m| VersionDetails::from_str(m.as_str()))?;
+            src.advance(caps.get(0).unwrap().end());
             return Ok(Some(Response::VersionInfo(version_info)));
         }
-        if let Some(idx) = line.iter().position(|b| *b == 0x81) {
+        if let Some(idx) = src.iter().position(|b| *b == 0x81) {
             // Align buffer with the first recieved message
             src.advance(idx);
             return Ok(None);
@@ -161,15 +168,22 @@ impl CCDCodec {
             Ok(None)
         } else {
             let scan = &src[HEAD_SIZE..package_size - CRC_SIZE];
-            let crc = scan.iter().fold(0u16, |accum, val| accum.wrapping_add(*val as u16));
+            let crc = scan
+                .iter()
+                .fold(0u16, |accum, val| accum.wrapping_add(*val as u16));
             let expected_crc = pair_u8_to_u16(src[package_size - 2], src[package_size - 1]);
             if crc != expected_crc {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("Invalid CRC, expected {}, got {}", expected_crc, crc)));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Invalid CRC, expected {}, got {}", expected_crc, crc),
+                ));
             }
             let frame = scan[PRE_PADDING * 2..(PRE_PADDING + FRAME_SIZE) * 2]
                 .chunks_exact(2)
                 .map(|b| pair_u8_to_u16(b[0], b[1]))
-                .collect::<Vec<u16>>().try_into().unwrap();
+                .collect::<Vec<u16>>()
+                .try_into()
+                .unwrap();
 
             src.advance(package_size);
             Ok(Some(Response::SingleReading(frame)))
@@ -208,7 +222,7 @@ impl Decoder for CCDCodec {
                 } else {
                     Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        "Unexpected scan size",
+                        format!("Unexpected scan size of {}", scan_size),
                     ))
                 }
             }
@@ -266,14 +280,16 @@ impl Decoder for CCDCodec {
 macro_rules! handle_ccd_response {
     ($resp:expr, $resp_type:path, $handler:expr) => {
         match $resp {
-            Some(Ok($resp_type(val))) => {
-                Ok($handler(val))
-            }
-            Some(Ok(_)) => {
-                Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Got unexpected type of response"))
-            }
-            Some(Err(err)) => { Err(err) }
-            None => { Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "No response found")) }
+            Some(Ok($resp_type(val))) => Ok($handler(val)),
+            Some(Ok(_)) => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Got unexpected type of response",
+            )),
+            Some(Err(err)) => Err(err),
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "No response found",
+            )),
         }
     };
 }
@@ -296,13 +312,13 @@ mod tests {
     }
 
     #[test]
-    fn versioninfo_decoding() {
+    fn expected_decoding() {
         let mut codec = CCDCodec {};
         let mut src = BytesMut::with_capacity(0);
-        src.extend_from_slice("LCAM_V8.4.2, S11639, V4.2, 202111161548\n".as_bytes());
+        // Encoded Response::VersionInfo
+        src.extend_from_slice("HdInfo:LCAM_V8.4.2,S11639,V4.2,202111161548".as_bytes());
 
         let res = codec.decode(&mut src).unwrap().unwrap();
-
         assert_eq!(
             res,
             Response::VersionInfo(VersionDetails {
@@ -312,12 +328,8 @@ mod tests {
                 serial_number: "202111161548".to_string(),
             })
         );
-    }
 
-    #[test]
-    fn singlereading_decoding() {
-        let mut codec = CCDCodec {};
-        let mut src = BytesMut::with_capacity(0);
+        // Encoded Response::SingleReading
         let [len_upper, len_lower] = ((PIXEL_COUNT * 2) as u16).to_be_bytes();
         // Head
         src.extend_from_slice(&[0x81, 0x01, len_upper, len_lower, 0x00]);
@@ -329,9 +341,10 @@ mod tests {
         src.extend_from_slice(&[0u8; POST_PADDING * 2]);
         // CRC
         src.extend_from_slice(&(0 as u16).to_be_bytes());
+        println!("{:?}", src);
+
 
         let res = codec.decode(&mut src).unwrap().unwrap();
-
         assert_eq!(
             res,
             Response::SingleReading([pair_u8_to_u16(16u8, 16u8); FRAME_SIZE])

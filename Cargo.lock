@@ -689,6 +689,8 @@ dependencies = [
  "color-eyre",
  "colored",
  "futures",
+ "lazy_static",
+ "regex",
  "tokio",
  "tokio-serial",
  "tokio-util",
