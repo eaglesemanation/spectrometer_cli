@@ -6,21 +6,60 @@ use std::{
     str::{from_utf8, FromStr},
 };
 use tokio_util::codec::{Decoder, Encoder};
+use snafu::Snafu;
 
 pub struct CCDCodec;
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum TriggerMode {
     SoftTrigger = 0x00,
     ContiniousHardTrigger = 0x01,
     SingleHardTrigger = 0x02,
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum BaudRate {
     Baud115200 = 0x01,
     Baud384000 = 0x02,
     Baud921600 = 0x03,
+}
+
+#[derive(Debug, Snafu)]
+pub enum BaudError {
+    #[snafu(display("Could not parse baud rate"))]
+    IncorrectBaudRate,
+}
+
+impl TryFrom<u32> for BaudRate {
+    type Error = BaudError;
+
+    fn try_from(b: u32) -> Result<Self, Self::Error> {
+        use BaudRate::*;
+        use BaudError::*;
+        match b {
+            115200 => Ok(Baud115200),
+            384000 => Ok(Baud384000),
+            921600 => Ok(Baud921600),
+            _ => Err(IncorrectBaudRate),
+        }
+    }
+}
+
+impl Into<u32> for BaudRate {
+    fn into(self) -> u32 {
+        use BaudRate::*;
+        match self {
+            Baud115200 => 115200,
+            Baud384000 => 384000,
+            Baud921600 => 921600,
+        }
+    }
+}
+
+impl Default for BaudRate {
+    fn default() -> Self {
+        BaudRate::Baud115200
+    }
 }
 
 #[derive(PartialEq, Eq, Debug)]
