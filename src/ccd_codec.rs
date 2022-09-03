@@ -57,9 +57,10 @@ fn command_code(cmd: &Command) -> u8 {
 }
 
 const HEAD_SIZE: usize = 5;
-const FRAME_SIZE: usize = 2048; // Amount of effective pixels
-const PRE_PADDING: usize = 32;
-const POST_PADDING: usize = 8;
+// FIXME: Get info on real padding values
+const FRAME_SIZE: usize = 3694; // Amount of effective pixels
+const PRE_PADDING: usize = 0;
+const POST_PADDING: usize = 0;
 const PIXEL_COUNT: usize = PRE_PADDING + FRAME_SIZE + POST_PADDING;
 const CRC_SIZE: usize = 2;
 
@@ -333,16 +334,23 @@ mod tests {
         let [len_upper, len_lower] = ((PIXEL_COUNT * 2) as u16).to_be_bytes();
         // Head
         src.extend_from_slice(&[0x81, 0x01, len_upper, len_lower, 0x00]);
-        // Prefix dummy pixels
-        src.extend_from_slice(&[0u8; PRE_PADDING * 2]);
-        // Actual data, use 16 for CRC overflow behaviour check
-        src.extend_from_slice(&[16u8; FRAME_SIZE * 2]);
-        // Postfix dummy pixels
-        src.extend_from_slice(&[0u8; POST_PADDING * 2]);
-        // CRC
-        src.extend_from_slice(&(0 as u16).to_be_bytes());
-        println!("{:?}", src);
-
+        // Full data block
+        let data: [u8; PIXEL_COUNT * 2] = core::array::from_fn(|i|
+            if i < PRE_PADDING * 2 {
+                // Prefix dummy pixels
+                0u8
+            } else if i < (PRE_PADDING + FRAME_SIZE) * 2 {
+                // Actual data, check for CRC overflow behaviour
+                16u8
+            } else {
+                // Postfix dummy pixels
+                0u8
+            }
+        );
+        // Calculate correct CRC
+        let crc = data.iter().fold(0u16, |acc, el| acc.wrapping_add((*el).into()));
+        src.extend_from_slice(&data);
+        src.extend_from_slice(&crc.to_be_bytes());
 
         let res = codec.decode(&mut src).unwrap().unwrap();
         assert_eq!(
