@@ -1,12 +1,13 @@
 use bytes::{Buf, BytesMut};
 use lazy_static::lazy_static;
+use num_derive::{FromPrimitive, ToPrimitive};
 use regex::Regex;
+use snafu::Snafu;
 use std::{
     io,
     str::{from_utf8, FromStr},
 };
 use tokio_util::codec::{Decoder, Encoder};
-use snafu::Snafu;
 
 pub struct CCDCodec;
 
@@ -17,11 +18,11 @@ pub enum TriggerMode {
     SingleHardTrigger = 0x02,
 }
 
-#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+#[derive(ToPrimitive, FromPrimitive, PartialEq, Eq, Debug, Clone, Copy)]
 pub enum BaudRate {
-    Baud115200 = 0x01,
-    Baud384000 = 0x02,
-    Baud921600 = 0x03,
+    Baud115200 = 115200,
+    Baud384000 = 384000,
+    Baud921600 = 921600,
 }
 
 #[derive(Debug, Snafu)]
@@ -30,35 +31,30 @@ pub enum BaudError {
     IncorrectBaudRate,
 }
 
-impl TryFrom<u32> for BaudRate {
-    type Error = BaudError;
-
-    fn try_from(b: u32) -> Result<Self, Self::Error> {
-        use BaudRate::*;
-        use BaudError::*;
-        match b {
-            115200 => Ok(Baud115200),
-            384000 => Ok(Baud384000),
-            921600 => Ok(Baud921600),
-            _ => Err(IncorrectBaudRate),
-        }
-    }
-}
-
-impl Into<u32> for BaudRate {
-    fn into(self) -> u32 {
-        use BaudRate::*;
-        match self {
-            Baud115200 => 115200,
-            Baud384000 => 384000,
-            Baud921600 => 921600,
-        }
-    }
-}
-
 impl Default for BaudRate {
     fn default() -> Self {
         BaudRate::Baud115200
+    }
+}
+
+impl BaudRate {
+    fn try_from_code(c: u8) -> Result<Self, BaudError> {
+        use BaudRate::*;
+        match c {
+            0x03 => Ok(Baud115200),
+            0x04 => Ok(Baud384000),
+            0x05 => Ok(Baud921600),
+            _ => Err(BaudError::IncorrectBaudRate),
+        }
+    }
+
+    fn to_code(&self) -> u8 {
+        use BaudRate::*;
+        match *self {
+            Baud115200 => 0x03,
+            Baud384000 => 0x04,
+            Baud921600 => 0x05,
+        }
     }
 }
 
@@ -77,21 +73,23 @@ pub enum Command {
     GetSerialBaudRate,
 }
 
-fn command_code(cmd: &Command) -> u8 {
-    use Command::*;
+impl Command {
+    fn code(&self) -> u8 {
+        use Command::*;
 
-    match *cmd {
-        SingleRead => 0x01,
-        ContinuousRead => 0x02,
-        SetIntegrationTime(_) => 0x03,
-        PauseRead => 0x06,
-        SetTrigerMode(_) => 0x07,
-        GetVersion => 0x09,
-        GetExposureTime => 0x0a,
-        SetAverageTime(_) => 0x0c,
-        GetAverageTime => 0x0e,
-        SetSerialBaudRate(_) => 0x13,
-        GetSerialBaudRate => 0x16,
+        match *self {
+            SingleRead => 0x01,
+            ContinuousRead => 0x02,
+            SetIntegrationTime(_) => 0x03,
+            PauseRead => 0x06,
+            SetTrigerMode(_) => 0x07,
+            GetVersion => 0x09,
+            GetExposureTime => 0x0a,
+            SetAverageTime(_) => 0x0c,
+            GetAverageTime => 0x0e,
+            SetSerialBaudRate(_) => 0x13,
+            GetSerialBaudRate => 0x16,
+        }
     }
 }
 
@@ -110,14 +108,17 @@ impl Encoder<Command> for CCDCodec {
         use Command::*;
 
         dst.reserve(HEAD_SIZE);
-        dst.extend_from_slice(&[0x81, command_code(&cmd)]);
+        // Head + Command code
+        dst.extend_from_slice(&[0x81, cmd.code()]);
+        // Data
         match cmd {
             SetIntegrationTime(t) => dst.extend_from_slice(&t.to_be_bytes()),
             SetTrigerMode(m) => dst.extend_from_slice(&[m as u8, 0x00]),
             SetAverageTime(t) => dst.extend_from_slice(&[t as u8, 0x00]),
-            SetSerialBaudRate(r) => dst.extend_from_slice(&[r as u8, 0x00]),
+            SetSerialBaudRate(r) => dst.extend_from_slice(&[r.to_code(), 0x00]),
             _ => dst.extend_from_slice(&[0x00, 0x00]),
         }
+        // Tail
         dst.extend_from_slice(&[0xff]);
 
         Ok(())
@@ -236,7 +237,6 @@ impl Decoder for CCDCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        use BaudRate::*;
         use Response::*;
 
         if src.len() < HEAD_SIZE {
@@ -293,16 +293,12 @@ impl Decoder for CCDCodec {
             // SerialBaudRate
             0x16 => {
                 src.advance(HEAD_SIZE);
-                let baud_rate = head[2];
-                match baud_rate {
-                    1 => Ok(Some(SerialBaudRate(Baud115200))),
-                    2 => Ok(Some(SerialBaudRate(Baud384000))),
-                    3 => Ok(Some(SerialBaudRate(Baud921600))),
-                    _ => Err(io::Error::new(
+                BaudRate::try_from_code(head[2])
+                    .map_err(|_| io::Error::new(
                         io::ErrorKind::InvalidData,
-                        "Unexpected baud rate reported",
-                    )),
-                }
+                        "Incorrect baud rate",
+                    ))
+                    .and_then(|baud_rate| Ok(Some(SerialBaudRate(baud_rate))))
             }
             _ => {
                 src.advance(HEAD_SIZE);
@@ -320,7 +316,7 @@ impl Decoder for CCDCodec {
 macro_rules! handle_ccd_response {
     ($resp:expr, $resp_type:path, $handler:expr) => {
         match $resp {
-            Some(Ok($resp_type(val))) => Ok($handler(val)),
+            Some(Ok($resp_type(val))) => $handler(val),
             Some(Ok(_)) => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Got unexpected type of response",
@@ -374,7 +370,7 @@ mod tests {
         // Head
         src.extend_from_slice(&[0x81, 0x01, len_upper, len_lower, 0x00]);
         // Full data block
-        let data: [u8; PIXEL_COUNT * 2] = core::array::from_fn(|i|
+        let data: [u8; PIXEL_COUNT * 2] = core::array::from_fn(|i| {
             if i < PRE_PADDING * 2 {
                 // Prefix dummy pixels
                 0u8
@@ -385,9 +381,11 @@ mod tests {
                 // Postfix dummy pixels
                 0u8
             }
-        );
+        });
         // Calculate correct CRC
-        let crc = data.iter().fold(0u16, |acc, el| acc.wrapping_add((*el).into()));
+        let crc = data
+            .iter()
+            .fold(0u16, |acc, el| acc.wrapping_add((*el).into()));
         src.extend_from_slice(&data);
         src.extend_from_slice(&crc.to_be_bytes());
 
