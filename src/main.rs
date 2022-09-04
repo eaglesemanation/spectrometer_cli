@@ -6,13 +6,8 @@ use color_eyre::{eyre::eyre, Result};
 use colored::*;
 use futures::{sink::SinkExt, stream::StreamExt};
 use num_traits::{FromPrimitive, ToPrimitive};
-use std::{path::Path, sync::Arc, time::Duration};
-use tokio::{
-    fs::File,
-    io::AsyncWriteExt,
-    sync::{oneshot, Mutex as AsyncMutex},
-    time::sleep,
-};
+use std::{path::Path, time::Duration};
+use tokio::{fs::File, io::AsyncWriteExt, time::sleep};
 use tokio_serial::{available_ports, SerialPortBuilderExt, SerialPortInfo, SerialStream};
 use tokio_util::codec::{Decoder, Framed};
 
@@ -27,16 +22,25 @@ struct Cli {
     command: Commands,
 }
 
+#[derive(Args)]
+struct SerialConf {
+    /// Name of serial port that should be used
+    #[clap(short, long, value_parser)]
+    serial: String,
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Lists connected serial devices
     List,
-    /// Get current baud rate
-    GetBaudRate(SerialConf),
     /// Get version info from CCD
     CCDVersion(SerialConf),
     /// Get readings from spectrometer
     Read(ReadCommand),
+    /// Baud rate related commands
+    BaudRate(BaudRateCommand),
+    /// "Average time" related commands
+    AverageTime(AvgTimeCommand),
 }
 
 #[derive(Args)]
@@ -51,16 +55,6 @@ enum ReadCommands {
     Single(SingleReadingConf),
     /// Continiously get readings for specified duration
     Duration(DurationReadingConf),
-}
-
-#[derive(Args)]
-struct SerialConf {
-    /// Name of serial port that should be used
-    #[clap(short, long, value_parser)]
-    serial: String,
-    /// Baud rate
-    #[clap(short, long, value_parser)]
-    baud_rate: Option<u32>,
 }
 
 #[derive(Args)]
@@ -83,6 +77,65 @@ struct DurationReadingConf {
     reading: SingleReadingConf,
 }
 
+#[derive(Args)]
+struct BaudRateCommand {
+    #[clap(subcommand)]
+    command: BaudRateCommands,
+}
+
+#[derive(Subcommand)]
+enum BaudRateCommands {
+    /// Get current baud rate
+    Get(SerialConf),
+    /// Set baud rate
+    Set(SetBaudRateConf),
+}
+
+#[derive(Args)]
+struct SetBaudRateConf {
+    /// New baud rate
+    #[clap(value_parser = parse_baud_rate)]
+    baud_rate: BaudRate,
+    
+    #[clap(flatten)]
+    serial: SerialConf,
+}
+
+fn parse_baud_rate(s: &str) -> Result<BaudRate> {
+    let n: u32 = s.parse()?;
+    BaudRate::from_u32(n).ok_or(eyre!(
+        "Baud rate of {} is not supported, use one of these: {:?}",
+        n,
+        BaudRate::all_baud_rates()
+            .iter()
+            .map(|b| b.to_u32().unwrap())
+            .collect::<Vec<u32>>()
+    ))
+}
+
+#[derive(Args)]
+struct AvgTimeCommand {
+    #[clap(subcommand)]
+    command: AvgTimeCommands,
+}
+
+#[derive(Subcommand)]
+enum AvgTimeCommands {
+    /// Get current "averate time"
+    Get(SerialConf),
+    /// Set "averate time"
+    Set(SetAvgTimeConf),
+}
+
+#[derive(Args)]
+struct SetAvgTimeConf {
+    /// New "average time"
+    #[clap(short, long, value_parser)]
+    averate_time: u8,
+    #[clap(flatten)]
+    serial: SerialConf,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     color_eyre::install()?;
@@ -90,12 +143,19 @@ async fn main() -> Result<()> {
 
     match &cli.command {
         Commands::List => list_serial(),
-        Commands::GetBaudRate(conf) => get_baud_rate(conf).await,
         Commands::CCDVersion(conf) => get_version(conf).await,
         Commands::Read(subcomm) => match &subcomm.command {
             ReadCommands::Single(conf) => get_single_reading(conf).await,
             ReadCommands::Duration(conf) => get_duration_reading(conf).await,
         },
+        Commands::BaudRate(subcomm) => match &subcomm.command {
+            BaudRateCommands::Get(conf) => get_baud_rate(conf).await,
+            BaudRateCommands::Set(conf) => set_baud_rate(conf).await,
+        },
+        Commands::AverageTime(subcomm) => match &subcomm.command {
+            AvgTimeCommands::Get(conf) => get_avg_time(conf).await,
+            AvgTimeCommands::Set(conf) => set_avg_time(conf).await,
+        }
     }
 }
 
@@ -149,79 +209,22 @@ fn list_serial() -> Result<()> {
     Ok(())
 }
 
-struct CCDConn {
-    ccd: Arc<AsyncMutex<Framed<SerialStream, CCDCodec>>>,
-    drop_tx: Option<oneshot::Sender<()>>,
-}
+async fn try_new_ccd(conf: &SerialConf) -> Result<Framed<SerialStream, CCDCodec>> {
+    // Use default baud rate for initial connection
+    let port = tokio_serial::new(conf.serial.clone(), BaudRate::default().to_u32().unwrap())
+        .open_native_async()?;
+    let mut ccd = ccd_codec::CCDCodec.framed(port);
+    ccd.send(CCDCommand::GetSerialBaudRate).await?;
 
-impl Drop for CCDConn {
-    // Use channels because async drop is not a thing yet
-    fn drop(&mut self) {
-        if let Some(tx) = self.drop_tx.take() {
-            tx.send(()).unwrap();
-        }
+    // Try to change to currently configured baud rate
+    let current_baud_rate = handle_ccd_response!(ccd.next().await, CCDResponse::SerialBaudRate, |b: BaudRate| {Ok(b)})?;
+    if current_baud_rate != BaudRate::default() {
+        drop(ccd);
+        let port = tokio_serial::new(conf.serial.clone(), current_baud_rate.to_u32().unwrap()).open_native_async()?;
+        ccd = ccd_codec::CCDCodec.framed(port);
     }
-}
 
-impl CCDConn {
-    async fn try_new(conf: &SerialConf) -> Result<Self> {
-        let (drop_tx, drop_rx) = oneshot::channel();
-
-        // Initial connection for setting up baud rate
-        let mut port =
-            tokio_serial::new(conf.serial.clone(), BaudRate::default().to_u32().unwrap())
-                .open_native_async()?;
-        #[cfg(unix)]
-        port.set_exclusive(false).unwrap();
-
-        let mut ccd = ccd_codec::CCDCodec.framed(port);
-        let conn = if conf.baud_rate.is_some()
-            && conf.baud_rate.unwrap() != BaudRate::default().to_u32().unwrap()
-        {
-            // Change baud rate to a different one
-            let baud_rate = BaudRate::from_u32(conf.baud_rate.unwrap()).unwrap();
-            ccd.send(CCDCommand::SetSerialBaudRate(baud_rate)).await?;
-            /*
-            handle_ccd_response!(ccd.next().await, CCDResponse::SerialBaudRate, |b| {
-                if b != baud_rate {
-                    Err(io::Error::new(io::ErrorKind::InvalidData, "Incorrect response on baud rate"))
-                } else {
-                    Ok(())
-                }
-            })?;
-            */
-            drop(ccd);
-
-            let mut port = tokio_serial::new(conf.serial.clone(), baud_rate.to_u32().unwrap())
-                .open_native_async()?;
-            #[cfg(unix)]
-            port.set_exclusive(false).unwrap();
-            let ccd = ccd_codec::CCDCodec.framed(port);
-            let ccd = Arc::new(AsyncMutex::new(ccd));
-            CCDConn {
-                ccd,
-                drop_tx: Some(drop_tx),
-            }
-        } else {
-            // Use default baud rate
-            let ccd = Arc::new(AsyncMutex::new(ccd));
-            CCDConn {
-                ccd,
-                drop_tx: Some(drop_tx),
-            }
-        };
-
-        let cloned_ccd = conn.ccd.clone();
-        tokio::spawn(async move {
-            drop_rx.await.unwrap();
-            let mut ccd = cloned_ccd.lock().await;
-            ccd.send(CCDCommand::SetSerialBaudRate(BaudRate::default().into()))
-                .await
-                .unwrap();
-        });
-
-        Ok(conn)
-    }
+    Ok(ccd)
 }
 
 /// Gets readings for specified duration of time
@@ -230,8 +233,7 @@ async fn get_duration_reading(conf: &DurationReadingConf) -> Result<()> {
     let timeout = sleep(Duration::from_secs(conf.duration.into()));
     tokio::pin!(timeout);
 
-    let ccd_conn = CCDConn::try_new(&conf.reading.serial).await?;
-    let ccd = &mut ccd_conn.ccd.lock().await;
+    let mut ccd = try_new_ccd(&conf.reading.serial).await?;
 
     ccd.send(CCDCommand::ContinuousRead).await?;
     loop {
@@ -259,8 +261,7 @@ async fn get_duration_reading(conf: &DurationReadingConf) -> Result<()> {
 }
 
 async fn get_single_reading(conf: &SingleReadingConf) -> Result<()> {
-    let ccd_conn = CCDConn::try_new(&conf.serial).await?;
-    let ccd = &mut ccd_conn.ccd.lock().await;
+    let mut ccd = try_new_ccd(&conf.serial).await?;
 
     ccd.send(CCDCommand::SingleRead).await?;
     let frame = handle_ccd_response!(ccd.next().await, CCDResponse::SingleReading, |frame| Ok(
@@ -274,8 +275,7 @@ async fn get_single_reading(conf: &SingleReadingConf) -> Result<()> {
 }
 
 async fn get_version(conf: &SerialConf) -> Result<()> {
-    let ccd_conn = CCDConn::try_new(&conf).await?;
-    let ccd = &mut ccd_conn.ccd.lock().await;
+    let mut ccd = try_new_ccd(&conf).await?;
 
     ccd.send(CCDCommand::GetVersion).await?;
     handle_ccd_response!(
@@ -294,8 +294,7 @@ async fn get_version(conf: &SerialConf) -> Result<()> {
 }
 
 async fn get_baud_rate(conf: &SerialConf) -> Result<()> {
-    let ccd_conn = CCDConn::try_new(&conf).await?;
-    let ccd = &mut ccd_conn.ccd.lock().await;
+    let mut ccd = try_new_ccd(&conf).await?;
 
     ccd.send(CCDCommand::GetSerialBaudRate).await?;
     handle_ccd_response!(
@@ -307,6 +306,40 @@ async fn get_baud_rate(conf: &SerialConf) -> Result<()> {
             Ok(())
         }
     )?;
+
+    Ok(())
+}
+
+async fn set_baud_rate(conf: &SetBaudRateConf) -> Result<()> {
+    let mut ccd = try_new_ccd(&conf.serial).await?;
+
+    ccd.send(CCDCommand::SetSerialBaudRate(conf.baud_rate))
+        .await?;
+
+    Ok(())
+}
+
+async fn get_avg_time(conf: &SerialConf) -> Result<()> {
+    let mut ccd = try_new_ccd(&conf).await?;
+
+    ccd.send(CCDCommand::GetAverageTime).await?;
+    handle_ccd_response!(
+        ccd.next().await,
+        CCDResponse::AverageTime,
+        |avg_t: u8| {
+            println!("Current \"average time\": {}", avg_t);
+            Ok(())
+        }
+    )?;
+
+    Ok(())
+}
+
+async fn set_avg_time(conf: &SetAvgTimeConf) -> Result<()> {
+    let mut ccd = try_new_ccd(&conf.serial).await?;
+
+    ccd.send(CCDCommand::SetAverageTime(conf.averate_time))
+        .await?;
 
     Ok(())
 }

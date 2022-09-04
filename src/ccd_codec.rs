@@ -38,12 +38,17 @@ impl Default for BaudRate {
 }
 
 impl BaudRate {
+    pub fn all_baud_rates() -> Vec<BaudRate> {
+        use BaudRate::*;
+        vec![Baud115200, Baud384000, Baud921600]
+    }
+
     fn try_from_code(c: u8) -> Result<Self, BaudError> {
         use BaudRate::*;
         match c {
-            0x03 => Ok(Baud115200),
-            0x04 => Ok(Baud384000),
-            0x05 => Ok(Baud921600),
+            0x01 => Ok(Baud115200),
+            0x02 => Ok(Baud384000),
+            0x03 => Ok(Baud921600),
             _ => Err(BaudError::IncorrectBaudRate),
         }
     }
@@ -51,9 +56,9 @@ impl BaudRate {
     fn to_code(&self) -> u8 {
         use BaudRate::*;
         match *self {
-            Baud115200 => 0x03,
-            Baud384000 => 0x04,
-            Baud921600 => 0x05,
+            Baud115200 => 0x01,
+            Baud384000 => 0x02,
+            Baud921600 => 0x03,
         }
     }
 }
@@ -296,7 +301,7 @@ impl Decoder for CCDCodec {
                 BaudRate::try_from_code(head[2])
                     .map_err(|_| io::Error::new(
                         io::ErrorKind::InvalidData,
-                        "Incorrect baud rate",
+                        format!("Recieved incorrect code for baud rate: {:?}", head[2]),
                     ))
                     .and_then(|baud_rate| Ok(Some(SerialBaudRate(baud_rate))))
             }
