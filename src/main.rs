@@ -2,11 +2,11 @@
 mod ccd_codec;
 
 use clap::{Args, Parser, Subcommand};
-use color_eyre::{eyre::eyre, Result};
-use colored::*;
 use futures::{sink::SinkExt, stream::StreamExt};
 use num_traits::{FromPrimitive, ToPrimitive};
-use std::{path::Path, time::Duration};
+use simple_eyre::{eyre::eyre, Result};
+use std::{io::Write, path::Path, time::Duration};
+use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use tokio::{fs::File, io::AsyncWriteExt, time::sleep};
 use tokio_serial::{available_ports, SerialPortBuilderExt, SerialPortInfo, SerialStream};
 use tokio_util::codec::{Decoder, Framed};
@@ -39,8 +39,10 @@ enum Commands {
     Read(ReadCommand),
     /// Baud rate related commands
     BaudRate(BaudRateCommand),
-    /// "Average time" related commands
+    /// "Average time" related commands, not sure what that really means
     AverageTime(AvgTimeCommand),
+    /// "Exposure time" related commands, not sure how that's different from "averate time"
+    ExposureTime(ExpTimeCommand),
 }
 
 #[derive(Args)]
@@ -96,7 +98,7 @@ struct SetBaudRateConf {
     /// New baud rate
     #[clap(value_parser = parse_baud_rate)]
     baud_rate: BaudRate,
-    
+
     #[clap(flatten)]
     serial: SerialConf,
 }
@@ -121,24 +123,47 @@ struct AvgTimeCommand {
 
 #[derive(Subcommand)]
 enum AvgTimeCommands {
-    /// Get current "averate time"
+    /// Get current "average time"
     Get(SerialConf),
-    /// Set "averate time"
+    /// Set "average time"
     Set(SetAvgTimeConf),
 }
 
 #[derive(Args)]
 struct SetAvgTimeConf {
     /// New "average time"
-    #[clap(short, long, value_parser)]
-    averate_time: u8,
+    #[clap(value_parser)]
+    average_time: u8,
+    #[clap(flatten)]
+    serial: SerialConf,
+}
+
+#[derive(Args)]
+struct ExpTimeCommand {
+    #[clap(subcommand)]
+    command: ExpTimeCommands,
+}
+
+#[derive(Subcommand)]
+enum ExpTimeCommands {
+    /// Get current "exposure time"
+    Get(SerialConf),
+    /// Set "exposure time"
+    Set(SetExpTimeConf),
+}
+
+#[derive(Args)]
+struct SetExpTimeConf {
+    /// New "exposure time"
+    #[clap(value_parser)]
+    exposure_time: u16,
     #[clap(flatten)]
     serial: SerialConf,
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    color_eyre::install()?;
+    simple_eyre::install()?;
     let cli = Cli::parse();
 
     match &cli.command {
@@ -155,8 +180,21 @@ async fn main() -> Result<()> {
         Commands::AverageTime(subcomm) => match &subcomm.command {
             AvgTimeCommands::Get(conf) => get_avg_time(conf).await,
             AvgTimeCommands::Set(conf) => set_avg_time(conf).await,
-        }
+        },
+        Commands::ExposureTime(subcomm) => match &subcomm.command {
+            ExpTimeCommands::Get(conf) => get_exp_time(conf).await,
+            ExpTimeCommands::Set(conf) => set_exp_time(conf).await,
+        },
     }
+}
+
+/// Returns std::io::Write stream with coloring enabled if programm is run interactively
+fn get_stdout() -> StandardStream {
+    StandardStream::stdout(if atty::is(atty::Stream::Stdout) {
+        ColorChoice::Auto
+    } else {
+        ColorChoice::Never
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -187,22 +225,19 @@ fn port_to_path(port: &SerialPortInfo) -> Result<String> {
 
 fn get_port_paths() -> Result<Vec<String>> {
     let ports = available_ports()?;
-    ports
-        .iter()
-        .map(port_to_path)
-        .filter(|path_res| match path_res {
-            Ok(path) => !path.is_empty(),
-            Err(_) => false,
-        })
-        .collect()
+    ports.iter().map(port_to_path).collect()
 }
 
 fn list_serial() -> Result<()> {
+    let mut stdout = get_stdout();
     let paths = get_port_paths()?;
     if paths.is_empty() {
-        println!("{}", "No connected serial ports found.".red())
+        stdout.set_color(ColorSpec::new().set_fg(Some(Color::Red)))?;
+        writeln!(&mut stdout, "No connected serial ports found.")?;
     } else {
-        println!("{}", "Connected serial ports:".green());
+        stdout.set_color(ColorSpec::new().set_fg(Some(Color::Green)))?;
+        writeln!(&mut stdout, "Connected serial ports:")?;
+        stdout.reset()?;
         paths.iter().for_each(|p| println!("{}", p));
     }
 
@@ -217,10 +252,15 @@ async fn try_new_ccd(conf: &SerialConf) -> Result<Framed<SerialStream, CCDCodec>
     ccd.send(CCDCommand::GetSerialBaudRate).await?;
 
     // Try to change to currently configured baud rate
-    let current_baud_rate = handle_ccd_response!(ccd.next().await, CCDResponse::SerialBaudRate, |b: BaudRate| {Ok(b)})?;
+    let current_baud_rate = handle_ccd_response!(
+        ccd.next().await,
+        CCDResponse::SerialBaudRate,
+        |b: BaudRate| { Ok(b) }
+    )?;
     if current_baud_rate != BaudRate::default() {
         drop(ccd);
-        let port = tokio_serial::new(conf.serial.clone(), current_baud_rate.to_u32().unwrap()).open_native_async()?;
+        let port = tokio_serial::new(conf.serial.clone(), current_baud_rate.to_u32().unwrap())
+            .open_native_async()?;
         ccd = ccd_codec::CCDCodec.framed(port);
     }
 
@@ -262,7 +302,6 @@ async fn get_duration_reading(conf: &DurationReadingConf) -> Result<()> {
 
 async fn get_single_reading(conf: &SingleReadingConf) -> Result<()> {
     let mut ccd = try_new_ccd(&conf.serial).await?;
-
     ccd.send(CCDCommand::SingleRead).await?;
     let frame = handle_ccd_response!(ccd.next().await, CCDResponse::SingleReading, |frame| Ok(
         frame
@@ -276,7 +315,6 @@ async fn get_single_reading(conf: &SingleReadingConf) -> Result<()> {
 
 async fn get_version(conf: &SerialConf) -> Result<()> {
     let mut ccd = try_new_ccd(&conf).await?;
-
     ccd.send(CCDCommand::GetVersion).await?;
     handle_ccd_response!(
         ccd.next().await,
@@ -289,13 +327,11 @@ async fn get_version(conf: &SerialConf) -> Result<()> {
             Ok(())
         }
     )?;
-
     Ok(())
 }
 
 async fn get_baud_rate(conf: &SerialConf) -> Result<()> {
     let mut ccd = try_new_ccd(&conf).await?;
-
     ccd.send(CCDCommand::GetSerialBaudRate).await?;
     handle_ccd_response!(
         ccd.next().await,
@@ -306,40 +342,46 @@ async fn get_baud_rate(conf: &SerialConf) -> Result<()> {
             Ok(())
         }
     )?;
-
     Ok(())
 }
 
 async fn set_baud_rate(conf: &SetBaudRateConf) -> Result<()> {
     let mut ccd = try_new_ccd(&conf.serial).await?;
-
     ccd.send(CCDCommand::SetSerialBaudRate(conf.baud_rate))
         .await?;
-
     Ok(())
 }
 
 async fn get_avg_time(conf: &SerialConf) -> Result<()> {
     let mut ccd = try_new_ccd(&conf).await?;
-
     ccd.send(CCDCommand::GetAverageTime).await?;
-    handle_ccd_response!(
-        ccd.next().await,
-        CCDResponse::AverageTime,
-        |avg_t: u8| {
-            println!("Current \"average time\": {}", avg_t);
-            Ok(())
-        }
-    )?;
-
+    handle_ccd_response!(ccd.next().await, CCDResponse::AverageTime, |avg_t: u8| {
+        println!("Current \"average time\": {}", avg_t);
+        Ok(())
+    })?;
     Ok(())
 }
 
 async fn set_avg_time(conf: &SetAvgTimeConf) -> Result<()> {
     let mut ccd = try_new_ccd(&conf.serial).await?;
-
-    ccd.send(CCDCommand::SetAverageTime(conf.averate_time))
+    ccd.send(CCDCommand::SetAverageTime(conf.average_time))
         .await?;
+    Ok(())
+}
 
+async fn get_exp_time(conf: &SerialConf) -> Result<()> {
+    let mut ccd = try_new_ccd(&conf).await?;
+    ccd.send(CCDCommand::GetExposureTime).await?;
+    handle_ccd_response!(ccd.next().await, CCDResponse::ExposureTime, |exp_t: u16| {
+        println!("Current \"exposure time\": {}", exp_t);
+        Ok(())
+    })?;
+    Ok(())
+}
+
+async fn set_exp_time(conf: &SetExpTimeConf) -> Result<()> {
+    let mut ccd = try_new_ccd(&conf.serial).await?;
+    ccd.send(CCDCommand::SetIntegrationTime(conf.exposure_time))
+        .await?;
     Ok(())
 }
