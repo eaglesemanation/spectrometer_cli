@@ -1,165 +1,28 @@
 #[allow(dead_code)]
 mod ccd_codec;
+mod cli;
 
-use clap::{Args, Parser, Subcommand};
+use clap::Parser;
+use strum::IntoEnumIterator;
 use futures::{sink::SinkExt, stream::StreamExt};
-use num_traits::{FromPrimitive, ToPrimitive};
+use num_traits::ToPrimitive;
 use simple_eyre::{eyre::eyre, Result};
-use std::{io::Write, path::Path, time::Duration};
+use std::{io::Write, path::Path};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
-use tokio::{fs::File, io::AsyncWriteExt, time::sleep};
-use tokio_serial::{available_ports, SerialPortBuilderExt, SerialPortInfo, SerialStream};
+use tokio::{
+    fs::File,
+    io::AsyncWriteExt,
+    time::{sleep, Duration},
+};
+use tokio_serial::{
+    available_ports, SerialPort, SerialPortBuilderExt, SerialPortInfo, SerialStream,
+};
 use tokio_util::codec::{Decoder, Framed};
 
 use ccd_codec::{
     handle_ccd_response, BaudRate, CCDCodec, Command as CCDCommand, Response as CCDResponse,
 };
-
-#[derive(Parser)]
-#[clap(author, version, about, long_about = None)]
-struct Cli {
-    #[clap(subcommand)]
-    command: Commands,
-}
-
-#[derive(Args)]
-struct SerialConf {
-    /// Name of serial port that should be used
-    #[clap(short, long, value_parser)]
-    serial: String,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Lists connected serial devices
-    List,
-    /// Get version info from CCD
-    CCDVersion(SerialConf),
-    /// Get readings from spectrometer
-    Read(ReadCommand),
-    /// Baud rate related commands
-    BaudRate(BaudRateCommand),
-    /// "Average time" related commands, not sure what that really means
-    AverageTime(AvgTimeCommand),
-    /// "Exposure time" related commands, not sure how that's different from "averate time"
-    ExposureTime(ExpTimeCommand),
-}
-
-#[derive(Args)]
-struct ReadCommand {
-    #[clap(subcommand)]
-    command: ReadCommands,
-}
-
-#[derive(Subcommand)]
-enum ReadCommands {
-    /// Get a single frame
-    Single(SingleReadingConf),
-    /// Continiously get readings for specified duration
-    Duration(DurationReadingConf),
-}
-
-#[derive(Args)]
-struct SingleReadingConf {
-    /// Path to a file where readings should be stored
-    #[clap(short, long, value_parser, value_hint = clap::ValueHint::FilePath)]
-    output: String,
-
-    #[clap(flatten)]
-    serial: SerialConf,
-}
-
-#[derive(Args)]
-struct DurationReadingConf {
-    /// Duration in seconds for which frames are continiously captured
-    #[clap(short, long, value_parser, default_value = "3")]
-    duration: u8,
-
-    #[clap(flatten)]
-    reading: SingleReadingConf,
-}
-
-#[derive(Args)]
-struct BaudRateCommand {
-    #[clap(subcommand)]
-    command: BaudRateCommands,
-}
-
-#[derive(Subcommand)]
-enum BaudRateCommands {
-    /// Get current baud rate
-    Get(SerialConf),
-    /// Set baud rate
-    Set(SetBaudRateConf),
-}
-
-#[derive(Args)]
-struct SetBaudRateConf {
-    /// New baud rate
-    #[clap(value_parser = parse_baud_rate)]
-    baud_rate: BaudRate,
-
-    #[clap(flatten)]
-    serial: SerialConf,
-}
-
-fn parse_baud_rate(s: &str) -> Result<BaudRate> {
-    let n: u32 = s.parse()?;
-    BaudRate::from_u32(n).ok_or(eyre!(
-        "Baud rate of {} is not supported, use one of these: {:?}",
-        n,
-        BaudRate::all_baud_rates()
-            .iter()
-            .map(|b| b.to_u32().unwrap())
-            .collect::<Vec<u32>>()
-    ))
-}
-
-#[derive(Args)]
-struct AvgTimeCommand {
-    #[clap(subcommand)]
-    command: AvgTimeCommands,
-}
-
-#[derive(Subcommand)]
-enum AvgTimeCommands {
-    /// Get current "average time"
-    Get(SerialConf),
-    /// Set "average time"
-    Set(SetAvgTimeConf),
-}
-
-#[derive(Args)]
-struct SetAvgTimeConf {
-    /// New "average time"
-    #[clap(value_parser)]
-    average_time: u8,
-    #[clap(flatten)]
-    serial: SerialConf,
-}
-
-#[derive(Args)]
-struct ExpTimeCommand {
-    #[clap(subcommand)]
-    command: ExpTimeCommands,
-}
-
-#[derive(Subcommand)]
-enum ExpTimeCommands {
-    /// Get current "exposure time"
-    Get(SerialConf),
-    /// Set "exposure time"
-    Set(SetExpTimeConf),
-}
-
-#[derive(Args)]
-struct SetExpTimeConf {
-    /// New "exposure time"
-    #[clap(value_parser)]
-    exposure_time: u16,
-    #[clap(flatten)]
-    serial: SerialConf,
-}
+use cli::*;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -175,7 +38,6 @@ async fn main() -> Result<()> {
         },
         Commands::BaudRate(subcomm) => match &subcomm.command {
             BaudRateCommands::Get(conf) => get_baud_rate(conf).await,
-            BaudRateCommands::Set(conf) => set_baud_rate(conf).await,
         },
         Commands::AverageTime(subcomm) => match &subcomm.command {
             AvgTimeCommands::Get(conf) => get_avg_time(conf).await,
@@ -237,33 +99,44 @@ fn list_serial() -> Result<()> {
     } else {
         stdout.set_color(ColorSpec::new().set_fg(Some(Color::Green)))?;
         writeln!(&mut stdout, "Connected serial ports:")?;
-        stdout.reset()?;
-        paths.iter().for_each(|p| println!("{}", p));
     }
+    stdout.reset()?;
+    paths.iter().for_each(|p| println!("{}", p));
 
     Ok(())
 }
 
 async fn try_new_ccd(conf: &SerialConf) -> Result<Framed<SerialStream, CCDCodec>> {
-    // Use default baud rate for initial connection
-    let port = tokio_serial::new(conf.serial.clone(), BaudRate::default().to_u32().unwrap())
-        .open_native_async()?;
-    let mut ccd = ccd_codec::CCDCodec.framed(port);
-    ccd.send(CCDCommand::GetSerialBaudRate).await?;
+    let mut current_baud: Option<BaudRate> = None;
+    let target_baud = conf.baud_rate.unwrap_or(BaudRate::default());
 
-    // Try to change to currently configured baud rate
-    let current_baud_rate = handle_ccd_response!(
-        ccd.next().await,
-        CCDResponse::SerialBaudRate,
-        |b: BaudRate| { Ok(b) }
-    )?;
-    if current_baud_rate != BaudRate::default() {
-        drop(ccd);
-        let port = tokio_serial::new(conf.serial.clone(), current_baud_rate.to_u32().unwrap())
-            .open_native_async()?;
-        ccd = ccd_codec::CCDCodec.framed(port);
+    let port = tokio_serial::new(conf.serial.clone(), target_baud.to_u32().unwrap())
+        .open_native_async()?;
+    let mut ccd = CCDCodec.framed(port);
+
+    // Try detecting current baud rate using all supported baud rates
+    for baud in BaudRate::iter() {
+        ccd.get_mut().set_baud_rate(baud.to_u32().unwrap())?;
+
+        if let Err(_) = ccd.send(CCDCommand::GetSerialBaudRate).await {
+            continue;
+        }
+
+        ccd.flush().await?;
+        let resp = ccd.next().await;
+        if let Some(Ok(CCDResponse::SerialBaudRate(b))) = resp {
+            current_baud = Some(b);
+            break;
+        }
     }
 
+    let current_baud = current_baud.ok_or(eyre!("Could not detect current baud rate"))?;
+    if current_baud != target_baud {
+        ccd.send(CCDCommand::SetSerialBaudRate(target_baud)).await?;
+    }
+
+    ccd.get_mut().set_baud_rate(target_baud.to_u32().unwrap())?;
+    ccd.flush().await?;
     Ok(ccd)
 }
 
@@ -279,13 +152,13 @@ async fn get_duration_reading(conf: &DurationReadingConf) -> Result<()> {
     loop {
         tokio::select! {
             resp = ccd.next() => {
-                if let Err(err) = handle_ccd_response!(
+                if let Err(e) = handle_ccd_response!(
                     resp, CCDResponse::SingleReading,
                     |frame: ccd_codec::Frame| {frames.push(frame); return Ok(())}
                 ) {
-                    println!("{:#}", err);
-                    break;
-                }
+                    eprintln!("Skipped frame: {}", e);
+                    continue;
+                };
             },
             _ = &mut timeout => {
                 break;
@@ -342,13 +215,6 @@ async fn get_baud_rate(conf: &SerialConf) -> Result<()> {
             Ok(())
         }
     )?;
-    Ok(())
-}
-
-async fn set_baud_rate(conf: &SetBaudRateConf) -> Result<()> {
-    let mut ccd = try_new_ccd(&conf.serial).await?;
-    ccd.send(CCDCommand::SetSerialBaudRate(conf.baud_rate))
-        .await?;
     Ok(())
 }
 

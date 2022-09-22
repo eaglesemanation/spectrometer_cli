@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [profile.release]
-#strip = true
-lto = true
+lto = true # Link time optimization
+opt-level = "s" # Optimize for size
+codegen-units = 1 # Optimization at a cost of non-parallel compilation
+strip = "debuginfo" # Remove debug symbols
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -20,8 +22,9 @@ num-derive = "0.3.3"
 num-traits = "0.2.15"
 regex = "1.6.0"
 simple-eyre = "0.3.1"
-snafu = "0.7.1"
+strum = { version = "0.24.1", features = ["derive"] }
 termcolor = "1.1.3"
+thiserror = "1.0.35"
 tokio = { version = "1.20.1", features = ["full"] }
 tokio-serial = "5.4.3"
 tokio-util = { version = "0.7.3", features = ["full"] }

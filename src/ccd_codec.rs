@@ -1,12 +1,14 @@
 use bytes::{Buf, BytesMut};
 use lazy_static::lazy_static;
 use num_derive::{FromPrimitive, ToPrimitive};
+use strum::{EnumIter, IntoEnumIterator};
 use regex::Regex;
-use snafu::Snafu;
 use std::{
+    fmt::{Debug, Display},
     io,
     str::{from_utf8, FromStr},
 };
+use thiserror::Error;
 use tokio_util::codec::{Decoder, Encoder};
 
 pub struct CCDCodec;
@@ -18,16 +20,16 @@ pub enum TriggerMode {
     SingleHardTrigger = 0x02,
 }
 
-#[derive(ToPrimitive, FromPrimitive, PartialEq, Eq, Debug, Clone, Copy)]
+#[derive(ToPrimitive, FromPrimitive, EnumIter, Debug, PartialEq, Eq, Clone, Copy)]
 pub enum BaudRate {
     Baud115200 = 115200,
     Baud384000 = 384000,
     Baud921600 = 921600,
 }
 
-#[derive(Debug, Snafu)]
+#[derive(Debug, Error)]
 pub enum BaudError {
-    #[snafu(display("Could not parse baud rate"))]
+    #[error("Could not parse baud rate, use one of those: {}", BaudRate::iter().map(|b| b.to_string()).collect::<Vec<String>>().join(", "))]
     IncorrectBaudRate,
 }
 
@@ -37,12 +39,13 @@ impl Default for BaudRate {
     }
 }
 
-impl BaudRate {
-    pub fn all_baud_rates() -> Vec<BaudRate> {
-        use BaudRate::*;
-        vec![Baud115200, Baud384000, Baud921600]
+impl Display for BaudRate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{}", *self as u32))
     }
+}
 
+impl BaudRate {
     fn try_from_code(c: u8) -> Result<Self, BaudError> {
         use BaudRate::*;
         match c {
@@ -299,10 +302,12 @@ impl Decoder for CCDCodec {
             0x16 => {
                 src.advance(HEAD_SIZE);
                 BaudRate::try_from_code(head[2])
-                    .map_err(|_| io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("Recieved incorrect code for baud rate: {:?}", head[2]),
-                    ))
+                    .map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("Recieved incorrect code for baud rate: {:?}", head[2]),
+                        )
+                    })
                     .and_then(|baud_rate| Ok(Some(SerialBaudRate(baud_rate))))
             }
             _ => {
