@@ -1,4 +1,4 @@
-use crate::ccd_codec::{BaudError, BaudRate};
+use crate::ccd_codec::{Error, BaudRate, CCDConf};
 use clap::{Args, Parser, Subcommand};
 use num_traits::FromPrimitive;
 
@@ -19,11 +19,20 @@ pub struct SerialConf {
     pub baud_rate: Option<BaudRate>,
 }
 
-fn parse_baud_rate(s: &str) -> Result<BaudRate, BaudError> {
+impl From<&SerialConf> for CCDConf {
+    fn from(serial: &SerialConf) -> Self {
+        CCDConf{
+            baud_rate: serial.baud_rate.unwrap_or(BaudRate::default()),
+            serial_path: serial.serial.clone(),
+        }
+    }
+}
+
+fn parse_baud_rate(s: &str) -> Result<BaudRate, Error> {
     s.parse()
         .or(Err(()))
         .and_then(|n| FromPrimitive::from_u32(n).ok_or(()))
-        .map_err(|_| BaudError::IncorrectBaudRate)
+        .map_err(|_| Error::InvalidBaudRate)
 }
 
 #[derive(Subcommand)]

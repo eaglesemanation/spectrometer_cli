@@ -1,6 +1,7 @@
 use bytes::{Buf, BytesMut};
 use lazy_static::lazy_static;
 use num_derive::{FromPrimitive, ToPrimitive};
+use num_traits::ToPrimitive;
 use strum::{EnumIter, IntoEnumIterator};
 use regex::Regex;
 use std::{
@@ -9,7 +10,11 @@ use std::{
     str::{from_utf8, FromStr},
 };
 use thiserror::Error;
-use tokio_util::codec::{Decoder, Encoder};
+use tokio_util::codec::{Decoder, Encoder, Framed};
+use tokio_serial::{
+    SerialPort, SerialPortBuilderExt, SerialStream,
+};
+use futures::{StreamExt, SinkExt};
 
 pub struct CCDCodec;
 
@@ -28,9 +33,13 @@ pub enum BaudRate {
 }
 
 #[derive(Debug, Error)]
-pub enum BaudError {
+pub enum Error {
     #[error("Could not parse baud rate, use one of those: {}", BaudRate::iter().map(|b| b.to_string()).collect::<Vec<String>>().join(", "))]
-    IncorrectBaudRate,
+    InvalidBaudRate,
+    #[error("Could not open a serial device with specified path")]
+    InvalidSerialPath,
+    #[error("Could not automatically detect baud rate for selected serial device")]
+    BaudAutoDetectFailed,
 }
 
 impl Default for BaudRate {
@@ -46,13 +55,13 @@ impl Display for BaudRate {
 }
 
 impl BaudRate {
-    fn try_from_code(c: u8) -> Result<Self, BaudError> {
+    fn try_from_code(c: u8) -> Result<Self, Error> {
         use BaudRate::*;
         match c {
             0x01 => Ok(Baud115200),
             0x02 => Ok(Baud384000),
             0x03 => Ok(Baud921600),
-            _ => Err(BaudError::IncorrectBaudRate),
+            _ => Err(Error::InvalidBaudRate),
         }
     }
 
@@ -176,6 +185,86 @@ fn pair_u8_to_u16(upper: u8, lower: u8) -> u16 {
     ((upper as u16) << 8) | (lower as u16)
 }
 
+impl Decoder for CCDCodec {
+    type Item = Response;
+    type Error = io::Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        use Response::*;
+        if src.len() < HEAD_SIZE {
+            // Wait until at least head is available
+            return Ok(None);
+        }
+        let mut head = [0u8; HEAD_SIZE];
+        head.copy_from_slice(&src[..HEAD_SIZE]);
+        // Return without a header, probably version info
+        if head[0] != 0x81 {
+            return self.decode_version_info(src);
+        }
+
+        // Header should be present, either 5 byte command, or full frame
+        match head[1] {
+            // SingleReading
+            // Orders of magnitude larger than standard 5 byte command, advance buffer only after
+            // full frame captured
+            0x01 => {
+                let scan_size: usize = pair_u8_to_u16(head[2], head[3]).into();
+                if (scan_size == 0 || scan_size == PIXEL_COUNT * 2) && head[4] == 0x00 {
+                    self.decode_frame(src)
+                } else {
+                    Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Unexpected scan size of {}", scan_size),
+                    ))
+                }
+            }
+            // ExposureTime
+            0x02 => {
+                src.advance(HEAD_SIZE);
+                let exp_t = pair_u8_to_u16(head[2], head[3]);
+                match head[4] {
+                    0xff => Ok(Some(ExposureTime(exp_t))),
+                    _ => Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Unexpected end of package",
+                    )),
+                }
+            }
+            // AverageTime
+            0x0e => {
+                src.advance(HEAD_SIZE);
+                let avg_t = head[2];
+                match (head[3], head[4]) {
+                    (0x00, 0xff) => Ok(Some(AverageTime(avg_t))),
+                    _ => Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Unexpected end of package",
+                    )),
+                }
+            }
+            // SerialBaudRate
+            0x16 => {
+                src.advance(HEAD_SIZE);
+                BaudRate::try_from_code(head[2])
+                    .map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("Recieved incorrect code for baud rate: {:?}", head[2]),
+                        )
+                    })
+                    .and_then(|baud_rate| Ok(Some(SerialBaudRate(baud_rate))))
+            }
+            _ => {
+                src.advance(HEAD_SIZE);
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Unexpected command code for return value",
+                ))
+            }
+        }
+    }
+}
+
 impl CCDCodec {
     fn decode_version_info(&mut self, src: &mut BytesMut) -> Result<Option<Response>, io::Error> {
         lazy_static! {
@@ -240,89 +329,29 @@ impl CCDCodec {
     }
 }
 
-impl Decoder for CCDCodec {
-    type Item = Response;
-    type Error = io::Error;
-
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        use Response::*;
-
-        if src.len() < HEAD_SIZE {
-            // Wait until at least head is available
-            return Ok(None);
-        }
-
-        let mut head = [0u8; HEAD_SIZE];
-        head.copy_from_slice(&src[..HEAD_SIZE]);
-
-        // Return without a header, probably version info
-        if head[0] != 0x81 {
-            return self.decode_version_info(src);
-        }
-
-        // Header should be present, either 5 byte command, or 4200 byte scan of ccd pixels
-        match head[1] {
-            // SingleReading
-            0x01 => {
-                let scan_size: usize = pair_u8_to_u16(head[2], head[3]).into();
-                if (scan_size == 0 || scan_size == PIXEL_COUNT * 2) && head[4] == 0x00 {
-                    self.decode_frame(src)
-                } else {
-                    Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("Unexpected scan size of {}", scan_size),
-                    ))
-                }
-            }
-            // ExposureTime
-            0x02 => {
-                src.advance(HEAD_SIZE);
-                let exp_t = pair_u8_to_u16(head[2], head[3]);
-                match head[4] {
-                    0xff => Ok(Some(ExposureTime(exp_t))),
-                    _ => Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "Unexpected end of package",
-                    )),
-                }
-            }
-            // AverageTime
-            0x0e => {
-                src.advance(HEAD_SIZE);
-                let avg_t = head[2];
-                match (head[3], head[4]) {
-                    (0x00, 0xff) => Ok(Some(AverageTime(avg_t))),
-                    _ => Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "Unexpected end of package",
-                    )),
-                }
-            }
-            // SerialBaudRate
-            0x16 => {
-                src.advance(HEAD_SIZE);
-                BaudRate::try_from_code(head[2])
-                    .map_err(|_| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("Recieved incorrect code for baud rate: {:?}", head[2]),
-                        )
-                    })
-                    .and_then(|baud_rate| Ok(Some(SerialBaudRate(baud_rate))))
-            }
-            _ => {
-                src.advance(HEAD_SIZE);
-                Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Unexpected command code for return value",
-                ))
-            }
-        }
-    }
-}
-
 /// Use a handler on a response from CCD codec only if resp matches resp_type
-/// TODO: Add an example of this macro usage
+/// # Examples
+/// ```
+/// # use std::io;
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), io::Error> {
+/// let mut ccd = try_new_ccd(&CCDConf{}).await?;
+/// ccd.send(Command::GetVersion).await?;
+/// panic!("Everything borked");
+/// handle_ccd_response!(
+///     ccd.next().await,
+///     Response::VersionInfo,
+///     |info: ccd_codec::VersionDetails| {
+///         println!("Hardware version: {}", info.hardware_version);
+///         println!("Firmware version: {}", info.firmware_version);
+///         println!("Sensor type: {}", info.sensor_type);
+///         println!("Serial number: {}", info.serial_number);
+///         Ok(())
+///     }
+/// )?;
+/// # Ok(())
+/// # };
+/// ```
 macro_rules! handle_ccd_response {
     ($resp:expr, $resp_type:path, $handler:expr) => {
         match $resp {
@@ -340,6 +369,45 @@ macro_rules! handle_ccd_response {
     };
 }
 pub(crate) use handle_ccd_response;
+
+pub struct CCDConf {
+    pub baud_rate: BaudRate,
+    pub serial_path: String
+}
+
+pub async fn try_new_ccd(conf: &CCDConf) -> Result<Framed<SerialStream, CCDCodec>, Error> {
+    let mut current_baud: Option<BaudRate> = None;
+
+    let port = tokio_serial::new(conf.serial_path.clone(), conf.baud_rate.to_u32().unwrap())
+        .open_native_async().map_err(|_| Error::InvalidSerialPath)?;
+    let mut ccd = CCDCodec.framed(port);
+
+    // Try detecting current baud rate using all supported baud rates
+    for baud in BaudRate::iter() {
+        ccd.get_mut().set_baud_rate(baud.to_u32().unwrap()).map_err(|_| Error::BaudAutoDetectFailed)?;
+
+        if let Err(_) = ccd.send(Command::GetSerialBaudRate).await {
+            continue;
+        }
+
+        ccd.flush().await.map_err(|_| Error::BaudAutoDetectFailed)?;
+        let resp = ccd.next().await;
+        if let Some(Ok(Response::SerialBaudRate(b))) = resp {
+            current_baud = Some(b);
+            break;
+        }
+    }
+
+    let current_baud = current_baud.ok_or(Error::BaudAutoDetectFailed)?;
+    if current_baud != conf.baud_rate {
+        ccd.send(Command::SetSerialBaudRate(conf.baud_rate)).await.map_err(|_| Error::BaudAutoDetectFailed)?;
+    }
+
+    ccd.get_mut().set_baud_rate(conf.baud_rate.to_u32().unwrap()).map_err(|_| Error::BaudAutoDetectFailed)?;
+    ccd.flush().await.map_err(|_| Error::BaudAutoDetectFailed)?;
+    Ok(ccd)
+}
+
 
 #[cfg(test)]
 mod tests {
