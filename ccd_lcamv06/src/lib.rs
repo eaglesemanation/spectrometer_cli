@@ -170,6 +170,17 @@ impl FromStr for VersionDetails {
     }
 }
 
+impl Display for VersionDetails {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(concat!(
+            "Hardware version: {}\n",
+            "Firmware version: {}\n",
+            "Sensor type: {}\n",
+            "Serial number: {}",
+        ), self.hardware_version, self.firmware_version, self.sensor_type, self.serial_number))
+    }
+}
+
 pub type Frame = [u16; FRAME_SIZE];
 
 #[derive(PartialEq, Eq, Debug)]
@@ -332,23 +343,22 @@ impl CCDCodec {
 /// Use a handler on a response from CCD codec only if resp matches resp_type
 /// # Examples
 /// ```
-/// # use futures_util::{SinkExt, StreamExt};
-/// # use ccd_lcamv06::*;
+/// # use tokio;
+/// use ccd_lcamv06::{Response, handle_ccd_response, VersionDetails};
 /// # #[tokio::main]
 /// # async fn main() {
-/// let mut ccd = try_new_ccd(&CCDConf{
-///     baud_rate: BaudRate::Baud115200,
-///     serial_path: "/dev/ttyACM0",
-/// }).await.unwrap();
-/// ccd.send(Command::GetVersion).await.unwrap();
+/// # let ccd_response = Some(Ok(Response::VersionInfo(VersionDetails{
+/// #   hardware_version: "1".to_string(),
+/// #   firmware_version: "2".to_string(),
+/// #   sensor_type: "3".to_string(),
+/// #   serial_number: "4".to_string(),
+/// # })));
 /// handle_ccd_response!(
-///     ccd.next().await,
+///     // Usually you would get this struct from Framed<StreamSerial, CCDCoded>
+///     ccd_response,
 ///     Response::VersionInfo,
 ///     |info: VersionDetails| {
-///         println!("Hardware version: {}", info.hardware_version);
-///         println!("Firmware version: {}", info.firmware_version);
-///         println!("Sensor type: {}", info.sensor_type);
-///         println!("Serial number: {}", info.serial_number);
+///         println!("{}", info);
 ///         Ok(())
 ///     }
 /// ).unwrap();

@@ -153,10 +153,7 @@ async fn get_version(conf: &SerialConf) -> Result<()> {
         ccd.next().await,
         CCDResponse::VersionInfo,
         |info: ccd_lcamv06::VersionDetails| {
-            println!("Hardware version: {}", info.hardware_version);
-            println!("Firmware version: {}", info.firmware_version);
-            println!("Sensor type: {}", info.sensor_type);
-            println!("Serial number: {}", info.serial_number);
+            println!("{}", info);
             Ok(())
         }
     )?;
