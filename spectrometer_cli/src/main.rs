@@ -1,5 +1,3 @@
-#[allow(dead_code)]
-mod ccd_codec;
 mod cli;
 
 use clap::Parser;
@@ -15,7 +13,7 @@ use tokio::{
 use tokio_serial::{available_ports, SerialPortInfo};
 use futures::{SinkExt, StreamExt};
 
-use ccd_codec::{
+use ccd_lcamv06::{
     try_new_ccd, handle_ccd_response, BaudRate, Command as CCDCommand, Response as CCDResponse
 };
 use cli::*;
@@ -116,7 +114,7 @@ async fn get_duration_reading(conf: &DurationReadingConf) -> Result<()> {
             resp = ccd.next() => {
                 if let Err(e) = handle_ccd_response!(
                     resp, CCDResponse::SingleReading,
-                    |frame: ccd_codec::Frame| {frames.push(frame); return Ok(())}
+                    |frame: ccd_lcamv06::Frame| {frames.push(frame); return Ok(())}
                 ) {
                     eprintln!("Skipped frame: {}", e);
                     continue;
@@ -154,7 +152,7 @@ async fn get_version(conf: &SerialConf) -> Result<()> {
     handle_ccd_response!(
         ccd.next().await,
         CCDResponse::VersionInfo,
-        |info: ccd_codec::VersionDetails| {
+        |info: ccd_lcamv06::VersionDetails| {
             println!("Hardware version: {}", info.hardware_version);
             println!("Firmware version: {}", info.firmware_version);
             println!("Sensor type: {}", info.sensor_type);

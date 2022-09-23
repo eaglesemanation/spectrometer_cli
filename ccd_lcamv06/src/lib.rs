@@ -332,26 +332,29 @@ impl CCDCodec {
 /// Use a handler on a response from CCD codec only if resp matches resp_type
 /// # Examples
 /// ```
-/// # use std::io;
+/// # use futures_util::{SinkExt, StreamExt};
+/// # use ccd_lcamv06::*;
 /// # #[tokio::main]
-/// # async fn main() -> Result<(), io::Error> {
-/// let mut ccd = try_new_ccd(&CCDConf{}).await?;
-/// ccd.send(Command::GetVersion).await?;
-/// panic!("Everything borked");
+/// # async fn main() {
+/// let mut ccd = try_new_ccd(&CCDConf{
+///     baud_rate: BaudRate::Baud115200,
+///     serial_path: "/dev/ttyACM0",
+/// }).await.unwrap();
+/// ccd.send(Command::GetVersion).await.unwrap();
 /// handle_ccd_response!(
 ///     ccd.next().await,
 ///     Response::VersionInfo,
-///     |info: ccd_codec::VersionDetails| {
+///     |info: VersionDetails| {
 ///         println!("Hardware version: {}", info.hardware_version);
 ///         println!("Firmware version: {}", info.firmware_version);
 ///         println!("Sensor type: {}", info.sensor_type);
 ///         println!("Serial number: {}", info.serial_number);
 ///         Ok(())
 ///     }
-/// )?;
-/// # Ok(())
-/// # };
+/// ).unwrap();
+/// # }
 /// ```
+#[macro_export]
 macro_rules! handle_ccd_response {
     ($resp:expr, $resp_type:path, $handler:expr) => {
         match $resp {
@@ -368,7 +371,6 @@ macro_rules! handle_ccd_response {
         }
     };
 }
-pub(crate) use handle_ccd_response;
 
 pub struct CCDConf {
     pub baud_rate: BaudRate,

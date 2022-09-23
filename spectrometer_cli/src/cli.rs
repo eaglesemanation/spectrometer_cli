@@ -1,4 +1,4 @@
-use crate::ccd_codec::{Error, BaudRate, CCDConf};
+use ccd_lcamv06::{Error, BaudRate, CCDConf};
 use clap::{Args, Parser, Subcommand};
 use num_traits::FromPrimitive;
 

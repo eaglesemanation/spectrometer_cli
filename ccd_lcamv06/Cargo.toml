@@ -1,0 +1,18 @@
+[package]
+name = "ccd_lcamv06"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytes = "1.2.1"
+futures = "0.3.23"
+lazy_static = "1.4.0"
+num = "0.4.0"
+num-derive = "0.3.3"
+num-traits = "0.2.15"
+regex = "1.6.0"
+strum = { version = "0.24.1", features = ["derive"] }
+thiserror = "1.0.35"
+tokio = { version = "1.20.1", features = ["full"] }
+tokio-serial = "5.4.3"
+tokio-util = { version = "0.7.3", features = ["full"] }
