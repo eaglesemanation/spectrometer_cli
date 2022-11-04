@@ -65,11 +65,20 @@ pub enum ReadCommands {
     Duration(DurationReadingConf),
 }
 
+#[derive(clap::ArgEnum, Clone)]
+pub enum OutputFormat {
+    CSV
+}
+
 #[derive(Args)]
 pub struct SingleReadingConf {
     /// Path to a file where readings should be stored
     #[clap(short, long, value_parser, value_hint = clap::ValueHint::FilePath)]
     pub output: String,
+
+    /// File format for reading output
+    #[clap(long, value_enum, default_value = "csv")]
+    pub format: OutputFormat,
 
     #[clap(flatten)]
     pub serial: SerialConf,
@@ -77,7 +86,7 @@ pub struct SingleReadingConf {
 
 #[derive(Args)]
 pub struct DurationReadingConf {
-    /// Duration in seconds for which frames are continiously captured
+    /// Duration in seconds for which frames are continuously captured
     #[clap(short, long, value_parser, default_value = "3")]
     pub duration: u8,
 

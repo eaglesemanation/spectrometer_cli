@@ -6,7 +6,7 @@
       let
         cross-compile = with pkgs.stdenv; !(isLinux && isAarch64);
         pkgsTarget = if cross-compile then pkgs.pkgsCross.aarch64-multiplatform-musl else pkgs;
-        cc = pkgsTarget.pkgsStatic.stdenv.cc;
+        inherit (pkgsTarget.pkgsStatic.stdenv) cc;
       in
       {
         src = ./.;
@@ -21,7 +21,7 @@
       let
         cross-compile = with pkgs.stdenv; !(isLinux && isx86_64);
         pkgsTarget = if cross-compile then pkgs.pkgsCross.x86_64-linux-musl else pkgs;
-        cc = pkgsTarget.pkgsStatic.stdenv.cc;
+        inherit (pkgsTarget.pkgsStatic.stdenv) cc;
       in
       {
         src = ./.;
@@ -36,7 +36,7 @@
       let
         cross-compile = with pkgs.stdenv; !(isLinux && isi686);
         pkgsTarget = if cross-compile then pkgs.pkgsCross.i686-linux-musl else pkgs;
-        cc = pkgsTarget.pkgsStatic.stdenv.cc;
+        inherit (pkgsTarget.pkgsStatic.stdenv) cc;
       in
       {
         src = ./.;

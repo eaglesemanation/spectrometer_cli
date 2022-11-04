@@ -1,6 +1,7 @@
 mod cli;
 
 use clap::Parser;
+use futures::{SinkExt, StreamExt};
 use num_traits::ToPrimitive;
 use simple_eyre::{eyre::eyre, Result};
 use std::{io::Write, path::Path};
@@ -11,10 +12,9 @@ use tokio::{
     time::{sleep, Duration},
 };
 use tokio_serial::{available_ports, SerialPortInfo};
-use futures::{SinkExt, StreamExt};
 
 use ccd_lcamv06::{
-    try_new_ccd, handle_ccd_response, BaudRate, Command as CCDCommand, Response as CCDResponse
+    handle_ccd_response, try_new_ccd, BaudRate, Command as CCDCommand, Response as CCDResponse,
 };
 use cli::*;
 
@@ -127,8 +127,20 @@ async fn get_duration_reading(conf: &DurationReadingConf) -> Result<()> {
     }
     ccd.send(CCDCommand::PauseRead).await?;
 
-    let mut out = File::create(&conf.reading.output).await?;
-    out.write_all(format!("{:#?}", frames).as_bytes()).await?;
+    match conf.reading.format {
+        OutputFormat::CSV => {
+            let mut out = File::create(&conf.reading.output).await?;
+            out.write_all(
+                frames
+                    .iter()
+                    .map(|frame| frame.map(|pixel| pixel.to_string()).join(","))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .as_bytes(),
+            )
+            .await?;
+        }
+    };
 
     Ok(())
 }
@@ -140,8 +152,19 @@ async fn get_single_reading(conf: &SingleReadingConf) -> Result<()> {
         frame
     ))?;
 
-    let mut out = File::create(&conf.output).await?;
-    out.write_all(format!("{:#?}", frame).as_bytes()).await?;
+    match conf.reading.format {
+        OutputFormat::CSV => {
+            let mut out = File::create(&conf.reading.output).await?;
+            out.write_all(
+                frames
+                    .iter()
+                    .map(|pixel| pixel.to_string())
+                    .join(",")
+                    .as_bytes(),
+            )
+            .await?;
+        }
+    };
 
     Ok(())
 }
