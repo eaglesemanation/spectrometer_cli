@@ -152,13 +152,14 @@ async fn get_single_reading(conf: &SingleReadingConf) -> Result<()> {
         frame
     ))?;
 
-    match conf.reading.format {
+    match conf.format {
         OutputFormat::CSV => {
-            let mut out = File::create(&conf.reading.output).await?;
+            let mut out = File::create(&conf.output).await?;
             out.write_all(
-                frames
+                frame
                     .iter()
                     .map(|pixel| pixel.to_string())
+                    .collect::<Vec<_>>()
                     .join(",")
                     .as_bytes(),
             )
