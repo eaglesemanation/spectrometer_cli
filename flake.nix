@@ -40,8 +40,8 @@
           );
       in
       rec {
-        defaultPackage = packages.${systemToTarget.${system}};
         packages = builtins.mapAttrs naerskBuildPackage cargoTargets;
+        defaultPackage = packages.${systemToTarget.${system}};
       }
     );
 }

@@ -1,20 +1,20 @@
+#![feature(array_chunks)]
+
 use bytes::{Buf, BytesMut};
+use futures::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::ToPrimitive;
-use strum::{EnumIter, IntoEnumIterator};
 use regex::Regex;
 use std::{
     fmt::{Debug, Display},
     io,
     str::{from_utf8, FromStr},
 };
+use strum::{EnumIter, IntoEnumIterator};
 use thiserror::Error;
+use tokio_serial::{SerialPort, SerialPortBuilderExt, SerialStream};
 use tokio_util::codec::{Decoder, Encoder, Framed};
-use tokio_serial::{
-    SerialPort, SerialPortBuilderExt, SerialStream,
-};
-use futures::{StreamExt, SinkExt};
 
 pub struct CCDCodec;
 
@@ -34,12 +34,18 @@ pub enum BaudRate {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Could not parse baud rate, use one of those: {}", BaudRate::iter().map(|b| b.to_string()).collect::<Vec<String>>().join(", "))]
+    #[error("Baud rate is not in range of accepted values: {}", BaudRate::iter().map(|b| b.to_string()).collect::<Vec<String>>().join(", "))]
     InvalidBaudRate,
-    #[error("Could not open a serial device with specified path")]
-    InvalidSerialPath,
     #[error("Could not automatically detect baud rate for selected serial device")]
     BaudAutoDetectFailed,
+    #[error("Could not open a serial device with specified path")]
+    InvalidSerialPath,
+    #[error("Could not parse recieved data correctly: {0}")]
+    InvalidData(String),
+    #[error("Unexpected end of package")]
+    UnexpectedEop,
+    #[error("IO error: {0}")]
+    IOError(#[from] io::Error),
 }
 
 impl Default for BaudRate {
@@ -118,8 +124,22 @@ const POST_PADDING: usize = 0;
 const PIXEL_COUNT: usize = PRE_PADDING + FRAME_SIZE + POST_PADDING;
 const CRC_SIZE: usize = 2;
 
+pub enum Endianness {
+    LittleEndian,
+    BigEndian
+}
+const ENDIANNESS: Endianness = Endianness::LittleEndian;
+pub const U16_FROM_BYTES: fn([u8; 2]) -> u16 = match ENDIANNESS {
+    Endianness::LittleEndian => u16::from_le_bytes,
+    Endianness::BigEndian => u16::from_be_bytes
+};
+pub const U16_TO_BYTES: fn(u16) -> [u8; 2] = match ENDIANNESS {
+    Endianness::LittleEndian => u16::to_le_bytes,
+    Endianness::BigEndian => u16::to_be_bytes
+};
+
 impl Encoder<Command> for CCDCodec {
-    type Error = io::Error;
+    type Error = Error;
 
     fn encode(&mut self, cmd: Command, dst: &mut BytesMut) -> Result<(), Self::Error> {
         use Command::*;
@@ -151,33 +171,36 @@ pub struct VersionDetails {
 }
 
 impl FromStr for VersionDetails {
-    type Err = io::Error;
+    type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.split(",").collect();
         if parts.len() != 4 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid format of version information",
-            ));
+            Err(Error::InvalidData(
+                "Version info should consist of 4 parts".to_string(),
+            ))
+        } else {
+            Ok(VersionDetails {
+                hardware_version: parts[0].to_string(),
+                sensor_type: parts[1].to_string(),
+                firmware_version: parts[2].to_string(),
+                serial_number: parts[3].to_string(),
+            })
         }
-        Ok(VersionDetails {
-            hardware_version: parts[0].to_string(),
-            sensor_type: parts[1].to_string(),
-            firmware_version: parts[2].to_string(),
-            serial_number: parts[3].to_string(),
-        })
     }
 }
 
 impl Display for VersionDetails {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!(concat!(
-            "Hardware version: {}\n",
-            "Firmware version: {}\n",
-            "Sensor type: {}\n",
-            "Serial number: {}",
-        ), self.hardware_version, self.firmware_version, self.sensor_type, self.serial_number))
+        f.write_fmt(format_args!(
+            concat!(
+                "Hardware version: {}\n",
+                "Firmware version: {}\n",
+                "Sensor type: {}\n",
+                "Serial number: {}",
+            ),
+            self.hardware_version, self.firmware_version, self.sensor_type, self.serial_number
+        ))
     }
 }
 
@@ -192,16 +215,14 @@ pub enum Response {
     VersionInfo(VersionDetails),
 }
 
-fn pair_u8_to_u16(upper: u8, lower: u8) -> u16 {
-    ((upper as u16) << 8) | (lower as u16)
-}
-
 impl Decoder for CCDCodec {
     type Item = Response;
-    type Error = io::Error;
+    type Error = Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        use Error::*;
         use Response::*;
+
         if src.len() < HEAD_SIZE {
             // Wait until at least head is available
             return Ok(None);
@@ -219,26 +240,25 @@ impl Decoder for CCDCodec {
             // Orders of magnitude larger than standard 5 byte command, advance buffer only after
             // full frame captured
             0x01 => {
-                let scan_size: usize = pair_u8_to_u16(head[2], head[3]).into();
+                let scan_size: usize = U16_FROM_BYTES(head[2..4].try_into().unwrap()).into();
                 if (scan_size == 0 || scan_size == PIXEL_COUNT * 2) && head[4] == 0x00 {
+                    // Cannot advance source buffer in case frame is not fully allocated yet
                     self.decode_frame(src)
                 } else {
-                    Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("Unexpected scan size of {}", scan_size),
-                    ))
+                    Err(InvalidData(format!(
+                        "Unexpected scan size of {}",
+                        scan_size
+                    )))
                 }
             }
             // ExposureTime
             0x02 => {
                 src.advance(HEAD_SIZE);
-                let exp_t = pair_u8_to_u16(head[2], head[3]);
+                // Safe to unwrap as long as HEAD_SIZE > 4
+                let exp_t = U16_FROM_BYTES(head[2..3].try_into().unwrap());
                 match head[4] {
                     0xff => Ok(Some(ExposureTime(exp_t))),
-                    _ => Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "Unexpected end of package",
-                    )),
+                    _ => Err(UnexpectedEop),
                 }
             }
             // AverageTime
@@ -247,29 +267,20 @@ impl Decoder for CCDCodec {
                 let avg_t = head[2];
                 match (head[3], head[4]) {
                     (0x00, 0xff) => Ok(Some(AverageTime(avg_t))),
-                    _ => Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "Unexpected end of package",
-                    )),
+                    _ => Err(UnexpectedEop),
                 }
             }
             // SerialBaudRate
             0x16 => {
                 src.advance(HEAD_SIZE);
                 BaudRate::try_from_code(head[2])
-                    .map_err(|_| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("Recieved incorrect code for baud rate: {:?}", head[2]),
-                        )
-                    })
+                    .map_err(|_| InvalidBaudRate)
                     .and_then(|baud_rate| Ok(Some(SerialBaudRate(baud_rate))))
             }
             _ => {
                 src.advance(HEAD_SIZE);
-                Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Unexpected command code for return value",
+                Err(InvalidData(
+                    "Unexpected command code for return value".to_string(),
                 ))
             }
         }
@@ -277,23 +288,22 @@ impl Decoder for CCDCodec {
 }
 
 impl CCDCodec {
-    fn decode_version_info(&mut self, src: &mut BytesMut) -> Result<Option<Response>, io::Error> {
+    fn decode_version_info(&mut self, src: &mut BytesMut) -> Result<Option<Response>, self::Error> {
+        use Error::*;
+
         lazy_static! {
             static ref VERSION_INFO_RE: Regex = Regex::new(r"^HdInfo:((?:.*,){3}\d{12})").unwrap();
         }
         if let Some(caps) = VERSION_INFO_RE.captures(from_utf8(src).unwrap_or("")) {
             let version_info = caps
                 .get(1)
-                .ok_or(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Could not parse version info",
-                ))
+                .ok_or(InvalidData("Could not parse version info".to_string()))
                 .and_then(|m| VersionDetails::from_str(m.as_str()))?;
             src.advance(caps.get(0).unwrap().end());
             return Ok(Some(Response::VersionInfo(version_info)));
         }
         if let Some(idx) = src.iter().position(|b| *b == 0x81) {
-            // Align buffer with the first recieved message
+            // Align buffer with the first received message
             src.advance(idx);
             return Ok(None);
         }
@@ -301,13 +311,14 @@ impl CCDCodec {
             // Let buffer fill a bit before deciding that it's garbage
             return Ok(None);
         }
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Could not find a structured response",
+        return Err(InvalidData(
+            "Could not find a structured response".to_string(),
         ));
     }
 
-    fn decode_frame(&mut self, src: &mut BytesMut) -> Result<Option<Response>, io::Error> {
+    fn decode_frame(&mut self, src: &mut BytesMut) -> Result<Option<Response>, self::Error> {
+        use Error::*;
+
         let package_size = HEAD_SIZE + PIXEL_COUNT * 2 + CRC_SIZE;
         if src.len() < package_size {
             if src.capacity() < package_size {
@@ -320,16 +331,22 @@ impl CCDCodec {
             let crc = scan
                 .iter()
                 .fold(0u16, |accum, val| accum.wrapping_add(*val as u16));
-            let expected_crc = pair_u8_to_u16(src[package_size - 2], src[package_size - 1]);
+            // Safe to unwrap, verified by if statement above
+            let expected_crc =
+                U16_FROM_BYTES(src[package_size - 2..package_size].try_into().unwrap());
             if crc != expected_crc {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Invalid CRC, expected {}, got {}", expected_crc, crc),
-                ));
+                return Err(InvalidData(format!(
+                    "Invalid CRC, expected {}, got {}",
+                    expected_crc, crc
+                )));
             }
             let frame = scan[PRE_PADDING * 2..(PRE_PADDING + FRAME_SIZE) * 2]
-                .chunks_exact(2)
-                .map(|b| pair_u8_to_u16(b[0], b[1]))
+                // Split into owned byte arrays of size 2
+                .array_chunks::<2>()
+                .cloned()
+                // Convert iterator over [u8; 2] into u16 assuming little-endian
+                .map(U16_FROM_BYTES)
+                // Convert iterator over u16 into [u16; _]
                 .collect::<Vec<u16>>()
                 .try_into()
                 .unwrap();
@@ -369,34 +386,33 @@ macro_rules! handle_ccd_response {
     ($resp:expr, $resp_type:path, $handler:expr) => {
         match $resp {
             Some(Ok($resp_type(val))) => $handler(val),
-            Some(Ok(_)) => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Got unexpected type of response",
+            Some(Ok(_)) => Err($crate::Error::InvalidData(
+                "Got unexpected type of response".to_string(),
             )),
             Some(Err(err)) => Err(err),
-            None => Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "No response found",
-            )),
+            None => Err($crate::Error::UnexpectedEop),
         }
     };
 }
 
 pub struct CCDConf {
     pub baud_rate: BaudRate,
-    pub serial_path: String
+    pub serial_path: String,
 }
 
 pub async fn try_new_ccd(conf: &CCDConf) -> Result<Framed<SerialStream, CCDCodec>, Error> {
     let mut current_baud: Option<BaudRate> = None;
 
     let port = tokio_serial::new(conf.serial_path.clone(), conf.baud_rate.to_u32().unwrap())
-        .open_native_async().map_err(|_| Error::InvalidSerialPath)?;
+        .open_native_async()
+        .map_err(|_| Error::InvalidSerialPath)?;
     let mut ccd = CCDCodec.framed(port);
 
     // Try detecting current baud rate using all supported baud rates
     for baud in BaudRate::iter() {
-        ccd.get_mut().set_baud_rate(baud.to_u32().unwrap()).map_err(|_| Error::BaudAutoDetectFailed)?;
+        ccd.get_mut()
+            .set_baud_rate(baud.to_u32().unwrap())
+            .map_err(|_| Error::BaudAutoDetectFailed)?;
 
         if let Err(_) = ccd.send(Command::GetSerialBaudRate).await {
             continue;
@@ -412,14 +428,17 @@ pub async fn try_new_ccd(conf: &CCDConf) -> Result<Framed<SerialStream, CCDCodec
 
     let current_baud = current_baud.ok_or(Error::BaudAutoDetectFailed)?;
     if current_baud != conf.baud_rate {
-        ccd.send(Command::SetSerialBaudRate(conf.baud_rate)).await.map_err(|_| Error::BaudAutoDetectFailed)?;
+        ccd.send(Command::SetSerialBaudRate(conf.baud_rate))
+            .await
+            .map_err(|_| Error::BaudAutoDetectFailed)?;
     }
 
-    ccd.get_mut().set_baud_rate(conf.baud_rate.to_u32().unwrap()).map_err(|_| Error::BaudAutoDetectFailed)?;
+    ccd.get_mut()
+        .set_baud_rate(conf.baud_rate.to_u32().unwrap())
+        .map_err(|_| Error::BaudAutoDetectFailed)?;
     ccd.flush().await.map_err(|_| Error::BaudAutoDetectFailed)?;
     Ok(ccd)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -456,7 +475,7 @@ mod tests {
         );
 
         // Encoded Response::SingleReading
-        let [len_upper, len_lower] = ((PIXEL_COUNT * 2) as u16).to_be_bytes();
+        let [len_upper, len_lower] = U16_TO_BYTES((PIXEL_COUNT * 2) as u16);
         // Head
         src.extend_from_slice(&[0x81, 0x01, len_upper, len_lower, 0x00]);
         // Full data block
@@ -466,7 +485,11 @@ mod tests {
                 0u8
             } else if i < (PRE_PADDING + FRAME_SIZE) * 2 {
                 // Actual data, check for CRC overflow behaviour
-                16u8
+                if i % 2 == 0 {
+                    0xAB
+                } else {
+                    0xCD
+                }
             } else {
                 // Postfix dummy pixels
                 0u8
@@ -477,12 +500,12 @@ mod tests {
             .iter()
             .fold(0u16, |acc, el| acc.wrapping_add((*el).into()));
         src.extend_from_slice(&data);
-        src.extend_from_slice(&crc.to_be_bytes());
+        src.extend_from_slice(&U16_TO_BYTES(crc));
 
         let res = codec.decode(&mut src).unwrap().unwrap();
         assert_eq!(
             res,
-            Response::SingleReading([pair_u8_to_u16(16u8, 16u8); FRAME_SIZE])
+            Response::SingleReading([U16_FROM_BYTES([0xAB, 0xCD]); FRAME_SIZE])
         )
     }
 }
