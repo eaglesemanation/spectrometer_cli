@@ -3,12 +3,6 @@ name = "spectrometer_cli"
 version = "0.1.0"
 edition = "2021"
 
-[profile.release]
-lto = true # Link time optimization
-opt-level = "s" # Optimize for size
-codegen-units = 1 # Optimization at a cost of non-parallel compilation
-strip = "debuginfo" # Remove debug symbols
-
 [dependencies]
 ccd_lcamv06 = { path = "../ccd_lcamv06" }
 atty = "0.2.14"

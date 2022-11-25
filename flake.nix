@@ -8,40 +8,67 @@
       url = "github:nmattia/naersk";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    flake-utils.url = "github:numtide/flake-utils";
+    utils.url = "github:numtide/flake-utils";
     nixpkgs.url = "nixpkgs/nixos-unstable";
   };
 
-  outputs = { self, fenix, naersk, flake-utils, nixpkgs }:
-    flake-utils.lib.eachDefaultSystem (system:
-      let
-        pkgs = nixpkgs.legacyPackages.${system};
+  outputs = { self, fenix, naersk, utils, nixpkgs }:
+    utils.lib.eachSystem
+      (builtins.attrValues {
+        # For now only support linux as build system
+        inherit (utils.lib.system) x86_64-linux aarch64-linux;
+      })
+      (system:
+        let
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ (import ./lib.nix) ];
+          };
+          inherit (pkgs.lib) toUpper removeSuffix stringAsChars recursiveMerge;
 
-        # Cross-compilation targets
-        buildTargets = import ./targets.nix {inherit pkgs;};
-        cargoTargets = buildTargets.cargoTargets;
-        systemToTarget = buildTargets.systemToTarget;
+          # Use C compiler that links statically (should be gcc with musl)
+          inherit (pkgs.pkgsStatic.stdenv) cc;
+          target = removeSuffix "-" cc.targetPrefix;
+          env_target = toUpper (stringAsChars (x: if x == "-" then "_" else x) target);
 
-        toolchain = with fenix.packages.${system};
-          combine ([
-            minimal.rustc
-            minimal.cargo
-          ] ++ builtins.map (cargoTarget: targets.${cargoTarget}.latest.rust-std) (builtins.attrNames cargoTargets));
+          toolchain = with fenix.packages.${system};
+            combine ([
+              minimal.rustc
+              minimal.cargo
+              targets.${target}.latest.rust-std
+            ]);
 
-        naersk' = naersk.lib.${system}.override {
-          cargo = toolchain;
-          rustc = toolchain;
-        };
+          naersk' = naersk.lib.${system}.override {
+            cargo = toolchain;
+            rustc = toolchain;
+          };
 
-        naerskBuildPackage = target: args:
-          naersk'.buildPackage (
-            args
-            // { CARGO_BUILD_TARGET = target; }
-          );
-      in
-      rec {
-        packages = builtins.mapAttrs naerskBuildPackage cargoTargets;
-        defaultPackage = packages.${systemToTarget.${system}};
-      }
-    );
+          naerskBuildPackage = package: args:
+            naersk'.buildPackage (
+              recursiveMerge [
+                {
+                  root = ./.;
+                  doCheck = true;
+                  strictDeps = true;
+
+                  nativeBuildInputs = [ cc ];
+
+                  cargoBuildOptions = x: x ++ [ "-p" package ];
+                  cargoTestOptions = x: x ++ [ "-p" package ];
+
+                  CARGO_BUILD_TARGET = target;
+                  CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
+                }
+                args
+              ]
+            );
+        in
+        rec {
+          packages = {
+            spectrometer_cli = naerskBuildPackage "spectrometer_cli" { };
+          };
+
+          defaultPackage = packages.spectrometer_cli;
+        }
+      );
 }

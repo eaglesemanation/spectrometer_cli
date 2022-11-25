@@ -118,25 +118,11 @@ impl Command {
 
 const HEAD_SIZE: usize = 5;
 // FIXME: Get info on real padding values
-const FRAME_SIZE: usize = 3694; // Amount of effective pixels
+pub const FRAME_SIZE: usize = 3694; // Amount of effective pixels
 const PRE_PADDING: usize = 0;
 const POST_PADDING: usize = 0;
 const PIXEL_COUNT: usize = PRE_PADDING + FRAME_SIZE + POST_PADDING;
 const CRC_SIZE: usize = 2;
-
-pub enum Endianness {
-    LittleEndian,
-    BigEndian
-}
-const ENDIANNESS: Endianness = Endianness::LittleEndian;
-pub const U16_FROM_BYTES: fn([u8; 2]) -> u16 = match ENDIANNESS {
-    Endianness::LittleEndian => u16::from_le_bytes,
-    Endianness::BigEndian => u16::from_be_bytes
-};
-pub const U16_TO_BYTES: fn(u16) -> [u8; 2] = match ENDIANNESS {
-    Endianness::LittleEndian => u16::to_le_bytes,
-    Endianness::BigEndian => u16::to_be_bytes
-};
 
 impl Encoder<Command> for CCDCodec {
     type Error = Error;
@@ -240,7 +226,7 @@ impl Decoder for CCDCodec {
             // Orders of magnitude larger than standard 5 byte command, advance buffer only after
             // full frame captured
             0x01 => {
-                let scan_size: usize = U16_FROM_BYTES(head[2..4].try_into().unwrap()).into();
+                let scan_size: usize = u16::from_be_bytes(head[2..4].try_into().unwrap()).into();
                 if (scan_size == 0 || scan_size == PIXEL_COUNT * 2) && head[4] == 0x00 {
                     // Cannot advance source buffer in case frame is not fully allocated yet
                     self.decode_frame(src)
@@ -255,7 +241,7 @@ impl Decoder for CCDCodec {
             0x02 => {
                 src.advance(HEAD_SIZE);
                 // Safe to unwrap as long as HEAD_SIZE > 4
-                let exp_t = U16_FROM_BYTES(head[2..3].try_into().unwrap());
+                let exp_t = u16::from_be_bytes(head[2..4].try_into().unwrap());
                 match head[4] {
                     0xff => Ok(Some(ExposureTime(exp_t))),
                     _ => Err(UnexpectedEop),
@@ -333,8 +319,9 @@ impl CCDCodec {
                 .fold(0u16, |accum, val| accum.wrapping_add(*val as u16));
             // Safe to unwrap, verified by if statement above
             let expected_crc =
-                U16_FROM_BYTES(src[package_size - 2..package_size].try_into().unwrap());
+                u16::from_be_bytes(src[package_size - 2..package_size].try_into().unwrap());
             if crc != expected_crc {
+                src.advance(package_size);
                 return Err(InvalidData(format!(
                     "Invalid CRC, expected {}, got {}",
                     expected_crc, crc
@@ -344,8 +331,8 @@ impl CCDCodec {
                 // Split into owned byte arrays of size 2
                 .array_chunks::<2>()
                 .cloned()
-                // Convert iterator over [u8; 2] into u16 assuming little-endian
-                .map(U16_FROM_BYTES)
+                // Convert iterator over [u8; 2] into u16 with big-endian
+                .map(u16::from_be_bytes)
                 // Convert iterator over u16 into [u16; _]
                 .collect::<Vec<u16>>()
                 .try_into()
@@ -440,6 +427,32 @@ pub async fn try_new_ccd(conf: &CCDConf) -> Result<Framed<SerialStream, CCDCodec
     Ok(ccd)
 }
 
+pub fn decode_from_string(single_reading_hex: &str) -> Vec<Result<Response, Error>> {
+    let mut codec = CCDCodec {};
+    let mut src = BytesMut::with_capacity(0);
+
+    let single_reading_iter = single_reading_hex.split(&[' ', '\n'][..]).filter_map(|b| {
+        if b.len() == 2 && b.chars().all(|c| c.is_ascii_hexdigit()) {
+            // Verified valid byte, safe to unwrap
+            Some(u8::from_str_radix(b, 16).unwrap())
+        } else {
+            None
+        }
+    });
+    src.extend(single_reading_iter);
+
+    let mut resp = Vec::new();
+
+    loop {
+        match codec.decode(&mut src) {
+            Ok(Some(pkg)) => resp.push(Ok(pkg)),
+            Err(err) => resp.push(Err(err)),
+            Ok(None) => break,
+        }
+    }
+    resp
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn expected_decoding() {
+    fn decode_version_info() {
         let mut codec = CCDCodec {};
         let mut src = BytesMut::with_capacity(0);
         // Encoded Response::VersionInfo
@@ -473,39 +486,50 @@ mod tests {
                 serial_number: "202111161548".to_string(),
             })
         );
+    }
 
-        // Encoded Response::SingleReading
-        let [len_upper, len_lower] = U16_TO_BYTES((PIXEL_COUNT * 2) as u16);
-        // Head
-        src.extend_from_slice(&[0x81, 0x01, len_upper, len_lower, 0x00]);
-        // Full data block
-        let data: [u8; PIXEL_COUNT * 2] = core::array::from_fn(|i| {
-            if i < PRE_PADDING * 2 {
-                // Prefix dummy pixels
-                0u8
-            } else if i < (PRE_PADDING + FRAME_SIZE) * 2 {
-                // Actual data, check for CRC overflow behaviour
-                if i % 2 == 0 {
-                    0xAB
-                } else {
-                    0xCD
-                }
-            } else {
-                // Postfix dummy pixels
-                0u8
-            }
+    #[test]
+    fn decode_single_reading() {
+        let res = decode_from_string(include_str!("./single_reading_example.txt"));
+        // In ideal scenario input data should be a flat line and all values equal,
+        // but this is a real world data and there is some noise.
+        // Instead test if standard deviation is not too big
+        if let Some(Ok(Response::SingleReading(frame))) = res.first() {
+            // Filter out flaky inputs
+            let frame_slice = &frame[10..frame.len() - 10];
+            let size = frame_slice.len() as f32;
+            let mean = frame_slice
+                .iter()
+                .fold(0f32, |accum, x| accum + (*x as f32 / size));
+            let deviation = (frame_slice
+                .iter()
+                .map(|val| {
+                    let diff = mean - *val as f32;
+                    diff * diff
+                })
+                .sum::<f32>()
+                / size)
+                .sqrt();
+            assert!(deviation < 100 as f32);
+        } else {
+            panic!("Incorrect response type");
+        }
+    }
+
+    #[test]
+    fn decode_stream() {
+        let res = decode_from_string(include_str!("./stream_example.txt"));
+        // At the very least first package should be a frame
+        assert!(if let Some(Ok(Response::SingleReading(_))) = res.first() {
+            true
+        } else {
+            false
         });
-        // Calculate correct CRC
-        let crc = data
-            .iter()
-            .fold(0u16, |acc, el| acc.wrapping_add((*el).into()));
-        src.extend_from_slice(&data);
-        src.extend_from_slice(&U16_TO_BYTES(crc));
-
-        let res = codec.decode(&mut src).unwrap().unwrap();
-        assert_eq!(
-            res,
-            Response::SingleReading([U16_FROM_BYTES([0xAB, 0xCD]); FRAME_SIZE])
-        )
+        // Stream is interrupted at unexpected point, last package should fail
+        assert!(if let Some(Err(_)) = res.last() {
+            true
+        } else {
+            false
+        });
     }
 }

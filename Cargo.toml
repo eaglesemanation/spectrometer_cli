@@ -2,5 +2,11 @@
 
 members = [
     "ccd_lcamv06",
-    "spectrometer_cli"
+    "spectrometer_cli",
 ]
+
+[profile.release]
+lto = true # Link time optimization
+opt-level = "s" # Optimize for size
+codegen-units = 1 # Optimization at a cost of non-parallel compilation
+strip = "debuginfo" # Remove debug symbols

@@ -1,4 +1,4 @@
-use ccd_lcamv06::{Error, BaudRate, CCDConf};
+use ccd_lcamv06::{BaudRate, CCDConf, Error};
 use clap::{Args, Parser, Subcommand};
 use num_traits::FromPrimitive;
 
@@ -21,7 +21,7 @@ pub struct SerialConf {
 
 impl From<&SerialConf> for CCDConf {
     fn from(serial: &SerialConf) -> Self {
-        CCDConf{
+        CCDConf {
             baud_rate: serial.baud_rate.unwrap_or(BaudRate::default()),
             serial_path: serial.serial.clone(),
         }
@@ -47,7 +47,7 @@ pub enum Commands {
     BaudRate(BaudRateCommand),
     /// "Average time" related commands, not sure what that really means
     AverageTime(AvgTimeCommand),
-    /// "Exposure time" related commands, not sure how that's different from "averate time"
+    /// "Exposure time" related commands, not sure how that's different from "average time"
     ExposureTime(ExpTimeCommand),
 }
 
@@ -61,13 +61,31 @@ pub struct ReadCommand {
 pub enum ReadCommands {
     /// Get a single frame
     Single(SingleReadingConf),
-    /// Continiously get readings for specified duration
+    /// Continuously get readings for specified duration
     Duration(DurationReadingConf),
+    /// Read from a file with hex encoded package with single reading
+    HexFile(HexFileReadingConf),
 }
 
 #[derive(clap::ArgEnum, Clone)]
 pub enum OutputFormat {
-    CSV
+    CSV,
+    Hex,
+}
+
+#[derive(Args)]
+pub struct HexFileReadingConf {
+    /// Input file with hex encoded byte sequence
+    #[clap(short, long, value_parser, value_hint = clap::ValueHint::FilePath)]
+    pub input: String,
+
+    /// Path to a file where readings should be stored
+    #[clap(short, long, value_parser, value_hint = clap::ValueHint::FilePath)]
+    pub output: String,
+
+    /// File format for reading output
+    #[clap(long, value_enum, default_value = "csv")]
+    pub format: OutputFormat,
 }
 
 #[derive(Args)]

@@ -7,14 +7,15 @@ use simple_eyre::{eyre::eyre, Result};
 use std::{io::Write, path::Path};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use tokio::{
-    fs::File,
+    fs::{read_to_string, File},
     io::AsyncWriteExt,
     time::{sleep, Duration},
 };
 use tokio_serial::{available_ports, SerialPortInfo};
 
 use ccd_lcamv06::{
-    handle_ccd_response, try_new_ccd, BaudRate, Command as CCDCommand, Response as CCDResponse,
+    decode_from_string, handle_ccd_response, try_new_ccd, BaudRate, Command as CCDCommand,
+    Response as CCDResponse,
 };
 use cli::*;
 
@@ -29,6 +30,7 @@ async fn main() -> Result<()> {
         Commands::Read(subcomm) => match &subcomm.command {
             ReadCommands::Single(conf) => get_single_reading(conf).await,
             ReadCommands::Duration(conf) => get_duration_reading(conf).await,
+            ReadCommands::HexFile(conf) => get_hex_file_reading(conf).await,
         },
         Commands::BaudRate(subcomm) => match &subcomm.command {
             BaudRateCommands::Get(conf) => get_baud_rate(conf).await,
@@ -44,7 +46,7 @@ async fn main() -> Result<()> {
     }
 }
 
-/// Returns std::io::Write stream with coloring enabled if programm is run interactively
+/// Returns std::io::Write stream with coloring enabled if program is run interactively
 fn get_stdout() -> StandardStream {
     StandardStream::stdout(if atty::is(atty::Stream::Stdout) {
         ColorChoice::Auto
@@ -100,6 +102,51 @@ fn list_serial() -> Result<()> {
     Ok(())
 }
 
+fn frame_to_hex(frame: &ccd_lcamv06::Frame) -> String {
+    frame
+        // Split frame into 4 word lines
+        .chunks(4)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .map(|pixel| {
+                    // Format each pixel as 4 letter hex word
+                    let [b1, b2] = u16::to_be_bytes(*pixel);
+                    return format!("{:02X}{:02X}", b1, b2);
+                })
+                .collect::<Vec<_>>()
+                // Separate each work with a space
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn frames_to_hex(frames: &[ccd_lcamv06::Frame]) -> String {
+    frames
+        .iter()
+        .map(frame_to_hex)
+        .collect::<Vec<_>>()
+        // Separate each frame by 2 empty lines
+        .join("\n\n\n")
+}
+
+fn frame_to_csv(frame: &ccd_lcamv06::Frame) -> String {
+    frame
+        .iter()
+        .map(|pixel| pixel.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn frames_to_csv(frames: &[ccd_lcamv06::Frame]) -> String {
+    frames
+        .iter()
+        .map(frame_to_csv)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Gets readings for specified duration of time
 async fn get_duration_reading(conf: &DurationReadingConf) -> Result<()> {
     let mut frames: Vec<_> = Vec::new();
@@ -130,15 +177,11 @@ async fn get_duration_reading(conf: &DurationReadingConf) -> Result<()> {
     match conf.reading.format {
         OutputFormat::CSV => {
             let mut out = File::create(&conf.reading.output).await?;
-            out.write_all(
-                frames
-                    .iter()
-                    .map(|frame| frame.map(|pixel| pixel.to_string()).join(","))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-                    .as_bytes(),
-            )
-            .await?;
+            out.write_all(frames_to_csv(&frames).as_bytes()).await?;
+        }
+        OutputFormat::Hex => {
+            let mut out = File::create(&conf.reading.output).await?;
+            out.write_all(frames_to_hex(&frames).as_bytes()).await?;
         }
     };
 
@@ -155,15 +198,41 @@ async fn get_single_reading(conf: &SingleReadingConf) -> Result<()> {
     match conf.format {
         OutputFormat::CSV => {
             let mut out = File::create(&conf.output).await?;
-            out.write_all(
-                frame
-                    .iter()
-                    .map(|pixel| pixel.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-                    .as_bytes(),
-            )
-            .await?;
+            out.write_all(frame_to_csv(&frame).as_bytes()).await?;
+        }
+        OutputFormat::Hex => {
+            let mut out = File::create(&conf.output).await?;
+            out.write_all(frame_to_hex(&frame).as_bytes()).await?;
+        }
+    };
+
+    Ok(())
+}
+
+async fn get_hex_file_reading(conf: &HexFileReadingConf) -> Result<()> {
+    let input_str = read_to_string(&conf.input).await?;
+    let responses = decode_from_string(&input_str);
+    let frames: Vec<_> = responses
+        .iter()
+        .enumerate()
+        .filter_map(|(i, resp)| match resp {
+            Ok(CCDResponse::SingleReading(frame)) => Some(frame.clone()),
+            Ok(_) => None,
+            Err(err) => {
+                println!("Couldn't parse package #{}: {}", i + 1, err);
+                None
+            }
+        })
+        .collect();
+
+    match conf.format {
+        OutputFormat::CSV => {
+            let mut out = File::create(&conf.output).await?;
+            out.write_all(frames_to_csv(&frames).as_bytes()).await?;
+        }
+        OutputFormat::Hex => {
+            let mut out = File::create(&conf.output).await?;
+            out.write_all(frames_to_hex(&frames).as_bytes()).await?;
         }
     };
 
@@ -231,4 +300,25 @@ async fn set_exp_time(conf: &SetExpTimeConf) -> Result<()> {
     ccd.send(CCDCommand::SetIntegrationTime(conf.exposure_time))
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn convert_frame_to_hex() {
+        let frame: ccd_lcamv06::Frame = [u16::from_be_bytes([0xA1, 0xB2]); ccd_lcamv06::FRAME_SIZE];
+        let hex = frame_to_hex(&frame);
+        let hex_lines: Vec<_> = hex.split("\n").collect();
+        assert_eq!(hex_lines[0], "A1B2 A1B2 A1B2 A1B2");
+    }
+
+    #[test]
+    fn convert_frame_to_csv() {
+        let frame: ccd_lcamv06::Frame = [1000; ccd_lcamv06::FRAME_SIZE];
+        let csv = frame_to_csv(&frame);
+        let csv_fields: Vec<_> = csv.split(",").collect();
+        assert_eq!(csv_fields[0], "1000");
+    }
 }
