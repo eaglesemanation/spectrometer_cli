@@ -1,5 +1,7 @@
 #![feature(array_chunks)]
 
+mod response_parser;
+
 use bytes::{Buf, BytesMut};
 use futures::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
