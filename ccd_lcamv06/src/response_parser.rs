@@ -1,10 +1,15 @@
 use core::fmt::Display;
+use core::ops::RangeFrom;
 use core::str::from_utf8;
 
 use nom::{
+    branch::alt,
     bytes::streaming::{tag, take, take_till1, take_while1},
+    combinator::{map, peek},
+    multi::fill,
+    number::streaming::{be_u16, be_u8},
     sequence::{terminated, tuple},
-    IResult,
+    IResult, InputIter, InputLength, Slice,
 };
 use num_derive::{FromPrimitive, ToPrimitive};
 
@@ -48,8 +53,7 @@ fn word_with_separator<'a>(input: &[u8]) -> IResult<&[u8], &str> {
 }
 
 fn version_response_prefix(input: &[u8]) -> IResult<&[u8], ()> {
-    let (input, _) = tag("HdInfo:")(input)?;
-    Ok((input, ()))
+    map(tag("HdInfo:"), |_| ())(input)
 }
 
 fn version_response<'a>(input: &'a [u8]) -> IResult<&'a [u8], VersionDetails<'a>> {
@@ -81,11 +85,14 @@ fn version_response<'a>(input: &'a [u8]) -> IResult<&'a [u8], VersionDetails<'a>
 }
 
 // Each reading is prefixed and postfixed with garbage data, which will be dropped
-const PRE_PADDING: usize = 0;
-const POST_PADDING: usize = 0;
-pub const FRAME_SIZE: usize = 3694;
+const FRAME_PIXEL_PREFIX: usize = 0;
+const FRAME_PIXEL_POSTFIX: usize = 0;
+// Amount of actual pixels in a single frame
+pub const FRAME_PIXEL_COUNT: usize = 3694;
+// Size of data part of SingleReading package
+const FRAME_TOTAL_COUNT: usize = FRAME_PIXEL_PREFIX + FRAME_PIXEL_COUNT + FRAME_PIXEL_POSTFIX;
 
-pub type Frame = [u16; FRAME_SIZE];
+pub type Frame = [u16; FRAME_PIXEL_COUNT];
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum Response<'a> {
@@ -96,13 +103,164 @@ pub enum Response<'a> {
     VersionInfo(VersionDetails<'a>),
 }
 
+/// byte version of nom::character::streaming::satisfy
+fn u8_satisfy<F, I, E: nom::error::ParseError<I>>(cond: F) -> impl Fn(I) -> IResult<I, u8, E>
+where
+    I: Slice<RangeFrom<usize>> + InputIter<Item = u8> + InputLength,
+    F: Fn(u8) -> bool,
+{
+    move |i: I| match (i).iter_elements().next().map(|b| (b, cond(b))) {
+        None => Err(nom::Err::Incomplete(nom::Needed::new(1))),
+        Some((_, false)) => Err(nom::Err::Error(E::from_error_kind(
+            i,
+            nom::error::ErrorKind::Digit,
+        ))),
+        Some((b, true)) => Ok((i.slice(1..), b)),
+    }
+}
+
 fn binary_response_prefix(input: &[u8]) -> IResult<&[u8], ()> {
-    
+    map(u8_satisfy(|b| b == 0x81), |_| ())(input)
+}
+
+/// Takes a byte slice and drops bytes until first valid prefix of a response
+pub fn align_response(input: &[u8]) -> IResult<&[u8], ()> {
+    for i in 0..input.len() {
+        match peek(alt((binary_response_prefix, version_response_prefix)))(&input[i..]) {
+            Ok(_) => return Ok((&input[i..], ())),
+            _ => {}
+        }
+    }
+    Err(nom::Err::Incomplete(nom::Needed::Unknown))
+}
+
+fn binary_response(input: &[u8]) -> IResult<&[u8], Response> {
+    let (input, _) = binary_response_prefix(input)?;
+    let (input, cmd) = be_u8(input)?;
+    match cmd {
+        0x01 => single_frame_parser(input),
+        0x02 => exposure_time_parser(input),
+        0x0e => average_time_parser(input),
+        0x16 => serial_baud_rate_parser(input),
+        _ => Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Digit,
+        ))),
+    }
+}
+
+fn single_frame_parser(input: &[u8]) -> IResult<&[u8], Response> {
+    // Parse head
+    let (input, scan_size) = be_u16(input)?;
+    if scan_size != (FRAME_TOTAL_COUNT as u16 * 2) {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Digit,
+        )));
+    }
+    let (input, _) = u8_satisfy(|b| b == 0x00)(input)?;
+
+
+    // Calculate CRC on individual bytes, each pixel is 2 bytes long
+    let crc = input[..FRAME_TOTAL_COUNT*2]
+        .iter()
+        .fold(0u16, |accum, val| accum.wrapping_add(*val as u16));
+
+    // Parse data
+    let mut data = [0u16; FRAME_TOTAL_COUNT];
+    let (input, ()) = fill(be_u16, &mut data)(input)?;
+    let (input, expected_crc) = be_u16(input)?;
+    if crc != expected_crc {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Digit,
+        )));
+    }
+    Ok((input, Response::SingleReading(data)))
+}
+
+fn exposure_time_parser(input: &[u8]) -> IResult<&[u8], Response> {
+    todo!();
+}
+
+fn average_time_parser(input: &[u8]) -> IResult<&[u8], Response> {
+    todo!();
+}
+
+fn serial_baud_rate_parser(input: &[u8]) -> IResult<&[u8], Response> {
+    todo!();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nom::{
+        error::{Error, ErrorKind},
+        Needed,
+    };
+
+    fn hex_to_bytes(hex: &str) -> Vec<u8> {
+        hex.split(&[' ', '\n'][..])
+            .filter_map(|b| {
+                if b.len() == 2 && b.chars().all(|c| c.is_ascii_hexdigit()) {
+                    // Verified valid byte, safe to unwrap
+                    Some(u8::from_str_radix(b, 16).unwrap())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn decode_binary_prefix() {
+        // Expected prefix
+        assert_eq!(binary_response_prefix(&[0x81u8]), Ok(((&[] as &[u8]), ())));
+        // Invalid prefix
+        assert_eq!(
+            binary_response_prefix(&[0x80u8]),
+            Err(nom::Err::Error(Error {
+                input: [0x80u8].as_slice(),
+                code: ErrorKind::Digit
+            }))
+        );
+        // Prefix did not arrive yet
+        assert_eq!(
+            binary_response_prefix(&[] as &[u8]),
+            Err(nom::Err::Incomplete(Needed::new(1)))
+        );
+    }
+
+    #[test]
+    fn decode_single_reading() {
+        let input = hex_to_bytes(include_str!("./single_reading_example.txt"));
+        let parse_res = binary_response(input.as_slice());
+        //assert!(parse_res.is_ok());
+        let (input, resp) = parse_res.unwrap();
+        assert!(input.len() == 0);
+        if let Response::SingleReading(frame) = resp {
+            assert!(frame[0] > 0);
+        } else {
+            panic!("Expected SingleReading response");
+        }
+    }
+
+    #[test]
+    fn test_align_response() {
+        assert_eq!(
+            align_response("   HdInfo:".as_bytes()),
+            Ok(("HdInfo:".as_bytes(), ()))
+        );
+        assert_eq!(
+            align_response(&([0xDE, 0xAD, 0xBE, 0xEF, 0x81] as [u8; 5])),
+            Ok((&[0x81u8] as &[u8], ()))
+        );
+        // Allow any kind of garbage until known valid response arrives
+        assert_eq!(
+            align_response("   HDInfo:".as_bytes()),
+            Err(nom::Err::Incomplete(Needed::Unknown))
+        );
+    }
 
     #[test]
     fn decode_version_info() {
