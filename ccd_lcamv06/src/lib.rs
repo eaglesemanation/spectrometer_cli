@@ -2,6 +2,8 @@
 
 mod response_parser;
 
+pub use response_parser::{align_response, parse_response};
+
 use bytes::{Buf, BytesMut};
 use futures::{SinkExt, StreamExt};
 use lazy_static::lazy_static;

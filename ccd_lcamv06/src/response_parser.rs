@@ -20,6 +20,30 @@ pub enum BaudRate {
     Baud921600 = 921600,
 }
 
+impl BaudRate {
+    // u8 is ambiguous type, avoid implementing TryFrom trait to make conversion from code more
+    // explicit
+    fn try_from_code(value: u8) -> Result<Self, &'static str> {
+        use BaudRate::*;
+        match value {
+            0x01 => Ok(Baud115200),
+            0x02 => Ok(Baud384000),
+            0x03 => Ok(Baud921600),
+            _ => Err("Invalid baud rate code"),
+        }
+    }
+
+    // u8 is ambiguous type, avoid implementing From trait to make conversion into code more explicit
+    fn to_code(&self) -> u8 {
+        use BaudRate::*;
+        match *self {
+            Baud115200 => 0x01,
+            Baud384000 => 0x02,
+            Baud921600 => 0x03,
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Debug)]
 pub struct VersionDetails<'a> {
     pub hardware_version: &'a str,
@@ -56,7 +80,7 @@ fn version_response_prefix(input: &[u8]) -> IResult<&[u8], ()> {
     map(tag("HdInfo:"), |_| ())(input)
 }
 
-fn version_response<'a>(input: &'a [u8]) -> IResult<&'a [u8], VersionDetails<'a>> {
+fn version_response<'a>(input: &'a [u8]) -> IResult<&'a [u8], Response<'a>> {
     let (input, (_, hardware_version, sensor_type, firmware_version, serial_number)) =
         tuple((
             // Prefix
@@ -75,12 +99,12 @@ fn version_response<'a>(input: &'a [u8]) -> IResult<&'a [u8], VersionDetails<'a>
 
     Ok((
         input,
-        VersionDetails {
+        Response::VersionInfo(VersionDetails {
             hardware_version,
             sensor_type,
             firmware_version,
             serial_number,
-        },
+        }),
     ))
 }
 
@@ -140,7 +164,7 @@ fn binary_response(input: &[u8]) -> IResult<&[u8], Response> {
     match cmd {
         0x01 => single_frame_parser(input),
         0x02 => exposure_time_parser(input),
-        0x0e => average_time_parser(input),
+        0x0E => average_time_parser(input),
         0x16 => serial_baud_rate_parser(input),
         _ => Err(nom::Err::Error(nom::error::Error::new(
             input,
@@ -160,9 +184,8 @@ fn single_frame_parser(input: &[u8]) -> IResult<&[u8], Response> {
     }
     let (input, _) = u8_satisfy(|b| b == 0x00)(input)?;
 
-
     // Calculate CRC on individual bytes, each pixel is 2 bytes long
-    let crc = input[..FRAME_TOTAL_COUNT*2]
+    let crc = input[..FRAME_TOTAL_COUNT * 2]
         .iter()
         .fold(0u16, |accum, val| accum.wrapping_add(*val as u16));
 
@@ -180,15 +203,37 @@ fn single_frame_parser(input: &[u8]) -> IResult<&[u8], Response> {
 }
 
 fn exposure_time_parser(input: &[u8]) -> IResult<&[u8], Response> {
-    todo!();
+    let (input, exposure_time) = be_u16(input)?;
+    let (input, _) = u8_satisfy(|b| b == 0xFF)(input)?;
+    Ok((input, Response::ExposureTime(exposure_time)))
 }
 
 fn average_time_parser(input: &[u8]) -> IResult<&[u8], Response> {
-    todo!();
+    let (input, average_time) = be_u8(input)?;
+    let (input, _) = u8_satisfy(|b| b == 0x00)(input)?;
+    let (input, _) = u8_satisfy(|b| b == 0xFF)(input)?;
+    Ok((input, Response::AverageTime(average_time)))
 }
 
 fn serial_baud_rate_parser(input: &[u8]) -> IResult<&[u8], Response> {
-    todo!();
+    let (input, baud_rate_code) = be_u8(input)?;
+    let (input, _) = u8_satisfy(|b| b == 0x00)(input)?;
+    let (input, _) = u8_satisfy(|b| b == 0xFF)(input)?;
+
+    if let Ok(baud_rate) = BaudRate::try_from_code(baud_rate_code) {
+        Ok((input, Response::SerialBaudRate(baud_rate)))
+    } else {
+        Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Digit,
+        )))
+    }
+}
+
+/// Takes aligned input and parses it as either as a byte stream, or as plain text in case of
+/// version info response
+pub fn parse_response(input: &[u8]) -> IResult<&[u8], Response> {
+    alt((binary_response, version_response))(input)
 }
 
 #[cfg(test)]
@@ -246,6 +291,39 @@ mod tests {
     }
 
     #[test]
+    fn decode_baud_rate() {
+        assert_eq!(
+            binary_response(&[0x81u8, 0x16, 0x01, 0x00, 0xFF]),
+            Ok((
+                (&[] as &[u8]),
+                Response::SerialBaudRate(BaudRate::Baud115200)
+            ))
+        );
+        // Invalid baud rate code
+        assert!(binary_response(&[0x81u8, 0x16, 0xFF, 0x00, 0xFF]).is_err());
+    }
+
+    #[test]
+    fn decode_exposure_time() {
+        assert_eq!(
+            binary_response(&[0x81u8, 0x02, 0xAB, 0xCD, 0xFF]),
+            Ok(((&[] as &[u8]), Response::ExposureTime(0xABCD)))
+        );
+        // Invalid suffix
+        assert!(binary_response(&[0x81, 0x02, 0xAB, 0xCD, 0x00]).is_err());
+    }
+
+    #[test]
+    fn decode_average_time() {
+        assert_eq!(
+            binary_response(&[0x81u8, 0x0E, 0xAB, 0x00, 0xFF]),
+            Ok(((&[] as &[u8]), Response::AverageTime(0xAB)))
+        );
+        // Incorrect low byte
+        assert!(binary_response(&[0x81u8, 0x0E, 0xAB, 0xCD, 0xFF]).is_err());
+    }
+
+    #[test]
     fn test_align_response() {
         assert_eq!(
             align_response("   HdInfo:".as_bytes()),
@@ -269,12 +347,12 @@ mod tests {
             version_response("HdInfo:LCAM_V8.4.2,S11639,V4.2,202111161548".as_bytes()),
             Ok((
                 "".as_bytes(),
-                VersionDetails {
+                Response::VersionInfo(VersionDetails {
                     hardware_version: "LCAM_V8.4.2",
                     sensor_type: "S11639",
                     firmware_version: "V4.2",
                     serial_number: "202111161548",
-                }
+                })
             ))
         );
     }
