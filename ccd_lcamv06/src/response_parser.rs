@@ -1,4 +1,3 @@
-use core::fmt::Display;
 use core::ops::RangeFrom;
 use core::str::from_utf8;
 
@@ -11,60 +10,8 @@ use nom::{
     sequence::{terminated, tuple},
     IResult, InputIter, InputLength, Slice,
 };
-use num_derive::{FromPrimitive, ToPrimitive};
 
-#[derive(ToPrimitive, FromPrimitive, Debug, PartialEq, Eq, Clone, Copy)]
-pub enum BaudRate {
-    Baud115200 = 115200,
-    Baud384000 = 384000,
-    Baud921600 = 921600,
-}
-
-impl BaudRate {
-    // u8 is ambiguous type, avoid implementing TryFrom trait to make conversion from code more
-    // explicit
-    fn try_from_code(value: u8) -> Result<Self, &'static str> {
-        use BaudRate::*;
-        match value {
-            0x01 => Ok(Baud115200),
-            0x02 => Ok(Baud384000),
-            0x03 => Ok(Baud921600),
-            _ => Err("Invalid baud rate code"),
-        }
-    }
-
-    // u8 is ambiguous type, avoid implementing From trait to make conversion into code more explicit
-    fn to_code(&self) -> u8 {
-        use BaudRate::*;
-        match *self {
-            Baud115200 => 0x01,
-            Baud384000 => 0x02,
-            Baud921600 => 0x03,
-        }
-    }
-}
-
-#[derive(PartialEq, Eq, Debug)]
-pub struct VersionDetails<'a> {
-    pub hardware_version: &'a str,
-    pub sensor_type: &'a str,
-    pub firmware_version: &'a str,
-    pub serial_number: &'a str,
-}
-
-impl<'a> Display for VersionDetails<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!(
-            concat!(
-                "Hardware version: {}\n",
-                "Firmware version: {}\n",
-                "Sensor type: {}\n",
-                "Serial number: {}",
-            ),
-            self.hardware_version, self.firmware_version, self.sensor_type, self.serial_number
-        ))
-    }
-}
+use super::{BaudRate, Response, VersionDetails, FRAME_TOTAL_COUNT};
 
 fn is_separator(c: u8) -> bool {
     c == b' ' || c == b','
@@ -80,7 +27,7 @@ fn version_response_prefix(input: &[u8]) -> IResult<&[u8], ()> {
     map(tag("HdInfo:"), |_| ())(input)
 }
 
-fn version_response<'a>(input: &'a [u8]) -> IResult<&'a [u8], Response<'a>> {
+fn version_response(input: &[u8]) -> IResult<&[u8], Response> {
     let (input, (_, hardware_version, sensor_type, firmware_version, serial_number)) =
         tuple((
             // Prefix
@@ -100,31 +47,12 @@ fn version_response<'a>(input: &'a [u8]) -> IResult<&'a [u8], Response<'a>> {
     Ok((
         input,
         Response::VersionInfo(VersionDetails {
-            hardware_version,
-            sensor_type,
-            firmware_version,
-            serial_number,
+            hardware_version: hardware_version.to_string(),
+            sensor_type: sensor_type.to_string(),
+            firmware_version: firmware_version.to_string(),
+            serial_number: serial_number.to_string(),
         }),
     ))
-}
-
-// Each reading is prefixed and postfixed with garbage data, which will be dropped
-const FRAME_PIXEL_PREFIX: usize = 0;
-const FRAME_PIXEL_POSTFIX: usize = 0;
-// Amount of actual pixels in a single frame
-pub const FRAME_PIXEL_COUNT: usize = 3694;
-// Size of data part of SingleReading package
-const FRAME_TOTAL_COUNT: usize = FRAME_PIXEL_PREFIX + FRAME_PIXEL_COUNT + FRAME_PIXEL_POSTFIX;
-
-pub type Frame = [u16; FRAME_PIXEL_COUNT];
-
-#[derive(PartialEq, Eq, Debug)]
-pub enum Response<'a> {
-    SingleReading(Frame),
-    ExposureTime(u16),
-    AverageTime(u8),
-    SerialBaudRate(BaudRate),
-    VersionInfo(VersionDetails<'a>),
 }
 
 /// byte version of nom::character::streaming::satisfy
@@ -185,20 +113,23 @@ fn single_frame_parser(input: &[u8]) -> IResult<&[u8], Response> {
     let (input, _) = u8_satisfy(|b| b == 0x00)(input)?;
 
     // Calculate CRC on individual bytes, each pixel is 2 bytes long
-    let crc = input[..FRAME_TOTAL_COUNT * 2]
+    let _crc = input[..FRAME_TOTAL_COUNT * 2]
         .iter()
         .fold(0u16, |accum, val| accum.wrapping_add(*val as u16));
 
     // Parse data
     let mut data = [0u16; FRAME_TOTAL_COUNT];
     let (input, ()) = fill(be_u16, &mut data)(input)?;
-    let (input, expected_crc) = be_u16(input)?;
+    let (input, _expected_crc) = be_u16(input)?;
+    // TODO: Figure out why some packages include wrong CRC
+    /*
     if crc != expected_crc {
         return Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Digit,
         )));
     }
+    */
     Ok((input, Response::SingleReading(data)))
 }
 
@@ -244,19 +175,6 @@ mod tests {
         Needed,
     };
 
-    fn hex_to_bytes(hex: &str) -> Vec<u8> {
-        hex.split(&[' ', '\n'][..])
-            .filter_map(|b| {
-                if b.len() == 2 && b.chars().all(|c| c.is_ascii_hexdigit()) {
-                    // Verified valid byte, safe to unwrap
-                    Some(u8::from_str_radix(b, 16).unwrap())
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
     #[test]
     fn decode_binary_prefix() {
         // Expected prefix
@@ -274,20 +192,6 @@ mod tests {
             binary_response_prefix(&[] as &[u8]),
             Err(nom::Err::Incomplete(Needed::new(1)))
         );
-    }
-
-    #[test]
-    fn decode_single_reading() {
-        let input = hex_to_bytes(include_str!("./single_reading_example.txt"));
-        let parse_res = binary_response(input.as_slice());
-        //assert!(parse_res.is_ok());
-        let (input, resp) = parse_res.unwrap();
-        assert!(input.len() == 0);
-        if let Response::SingleReading(frame) = resp {
-            assert!(frame[0] > 0);
-        } else {
-            panic!("Expected SingleReading response");
-        }
     }
 
     #[test]
@@ -348,10 +252,10 @@ mod tests {
             Ok((
                 "".as_bytes(),
                 Response::VersionInfo(VersionDetails {
-                    hardware_version: "LCAM_V8.4.2",
-                    sensor_type: "S11639",
-                    firmware_version: "V4.2",
-                    serial_number: "202111161548",
+                    hardware_version: "LCAM_V8.4.2".to_string(),
+                    sensor_type: "S11639".to_string(),
+                    firmware_version: "V4.2".to_string(),
+                    serial_number: "202111161548".to_string(),
                 })
             ))
         );

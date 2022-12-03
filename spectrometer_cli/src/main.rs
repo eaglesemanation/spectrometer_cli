@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn convert_frame_to_hex() {
-        let frame: ccd_lcamv06::Frame = [u16::from_be_bytes([0xA1, 0xB2]); ccd_lcamv06::FRAME_SIZE];
+        let frame: ccd_lcamv06::Frame = [u16::from_be_bytes([0xA1, 0xB2]); ccd_lcamv06::FRAME_PIXEL_COUNT];
         let hex = frame_to_hex(&frame);
         let hex_lines: Vec<_> = hex.split("\n").collect();
         assert_eq!(hex_lines[0], "A1B2 A1B2 A1B2 A1B2");
@@ -316,7 +316,7 @@ mod tests {
 
     #[test]
     fn convert_frame_to_csv() {
-        let frame: ccd_lcamv06::Frame = [1000; ccd_lcamv06::FRAME_SIZE];
+        let frame: ccd_lcamv06::Frame = [1000; ccd_lcamv06::FRAME_PIXEL_COUNT];
         let csv = frame_to_csv(&frame);
         let csv_fields: Vec<_> = csv.split(",").collect();
         assert_eq!(csv_fields[0], "1000");
