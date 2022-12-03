@@ -305,11 +305,8 @@ pub fn decode_from_string(single_reading_hex: &str) -> Vec<Result<Response, Erro
 
     loop {
         match codec.decode(&mut src) {
-            Ok(Some(pkg)) => {resp.push(Ok(pkg))},
-            Err(err) => {
-                println!("Got an error: {}", err);
-                resp.push(Err(err))
-            },
+            Ok(Some(pkg)) => resp.push(Ok(pkg)),
+            Err(err) => resp.push(Err(err)),
             Ok(None) => break,
         }
     }
