@@ -3,15 +3,16 @@ name = "ccd_lcamv06"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [dependencies]
 bytes = "1.2.1"
 futures = "0.3.23"
-lazy_static = "1.4.0"
 nom = "7.1.1"
 num = "0.4.0"
 num-derive = "0.3.3"
 num-traits = "0.2.15"
-regex = "1.6.0"
 strum = { version = "0.24.1", features = ["derive"] }
 thiserror = "1.0.35"
 tokio = { version = "1.20.1", features = ["full"] }

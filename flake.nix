@@ -26,49 +26,92 @@
           };
           inherit (pkgs.lib) toUpper removeSuffix stringAsChars recursiveMerge;
 
-          # Use C compiler that links statically (should be gcc with musl)
-          inherit (pkgs.pkgsStatic.stdenv) cc;
-          target = removeSuffix "-" cc.targetPrefix;
-          env_target = toUpper (stringAsChars (x: if x == "-" then "_" else x) target);
+          # For statically linked binaries
+          ccStatic = pkgs.pkgsStatic.stdenv.cc;
+          targetStatic = removeSuffix "-" ccStatic.targetPrefix;
 
-          toolchain = with fenix.packages.${system};
+          rustToolchain = with fenix.packages.${system};
             combine ([
               minimal.rustc
               minimal.cargo
-              targets.${target}.latest.rust-std
+              targets.${targetStatic}.latest.rust-std
+              targets.x86_64-pc-windows-gnu.latest.rust-std
             ]);
 
-          naersk' = naersk.lib.${system}.override {
-            cargo = toolchain;
-            rustc = toolchain;
+          cargoDerivationBuilder = naersk.lib.${system}.override {
+            cargo = rustToolchain;
+            rustc = rustToolchain;
           };
 
-          naerskBuildPackage = package: args:
-            naersk'.buildPackage (
+          # Build binary dynamically linked to system libs
+          cargoBuildPackage = package: args:
+            cargoDerivationBuilder.buildPackage (
               recursiveMerge [
                 {
                   root = ./.;
                   doCheck = true;
                   strictDeps = true;
 
-                  nativeBuildInputs = [ cc ];
-
                   cargoBuildOptions = x: x ++ [ "-p" package ];
                   cargoTestOptions = x: x ++ [ "-p" package ];
-
-                  CARGO_BUILD_TARGET = target;
-                  CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static";
                 }
                 args
               ]
             );
+
+          # Build binary statically linked to system libs
+          cargoBuildPackageStatic = package: args:
+            cargoBuildPackage package (recursiveMerge [
+              {
+                nativeBuildInputs = [ ccStatic ];
+                CARGO_BUILD_TARGET = targetStatic;
+              }
+              args
+            ]);
+
+          # Cross compile to Windows
+          cargoBuildWinPackage = package: args:
+            cargoBuildPackage package (recursiveMerge [
+              {
+                depsBuildBuild = with pkgs.pkgsCross.mingwW64; [
+                  stdenv.cc
+                  windows.pthreads
+                ];
+
+                nativeBuildInputs = with pkgs;  [
+                  winePackages.minimal
+                ];
+
+                doCheck = false;
+                CARGO_BUILD_TARGET = "x86_64-pc-windows-gnu";
+                CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER = pkgs.writeScript "wine-wrapper" ''
+                  export WINEPREFIX="$(mktemp -d)"
+                  exec wine64 $@
+                '';
+              }
+            ]);
         in
         rec {
+          legacyPackages.pkgsCross = {
+            mingwW64 = {
+              spectrometer_cli = cargoBuildWinPackage "spectrometer_cli" { };
+            };
+          };
+
           packages = {
-            spectrometer_cli = naerskBuildPackage "spectrometer_cli" { };
+            spectrometer_cli = cargoBuildPackageStatic "spectrometer_cli" { };
           };
 
           defaultPackage = packages.spectrometer_cli;
+
+          devShells.default = pkgs.mkShell {
+            buildInputs = with pkgs; [
+              pkgsCross.mingwW64.stdenv.cc
+              pkgsCross.mingwW64.windows.pthreads
+              winePackages.minimal
+              rustToolchain
+            ];
+          };
         }
       );
 }
