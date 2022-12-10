@@ -1,116 +1,70 @@
 {
   inputs = {
-    fenix = {
-      url = "github:nix-community/fenix";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    naersk = {
-      url = "github:nmattia/naersk";
+    crane = {
+      url = "github:ipetkov/crane";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     utils.url = "github:numtide/flake-utils";
     nixpkgs.url = "nixpkgs/nixos-unstable";
   };
 
-  outputs = { self, fenix, naersk, utils, nixpkgs }:
+  outputs = { self, rust-overlay, crane, utils, nixpkgs }:
     utils.lib.eachSystem
       (builtins.attrValues {
-        # For now only support linux as build system
-        inherit (utils.lib.system) x86_64-linux aarch64-linux;
+        # For now only support building from x64 Linux
+        inherit (utils.lib.system) x86_64-linux;
       })
-      (system:
+      (localSystem:
         let
-          pkgs = import nixpkgs {
-            inherit system;
-            overlays = [ (import ./lib.nix) ];
+          staticTarget = nixpkgs.legacyPackages.${localSystem}.pkgsStatic.targetPlatform.config;
+
+          pkgsStatic = import nixpkgs {
+            inherit localSystem;
+            crossSystem.config = staticTarget;
+            overlays = [
+              (import rust-overlay)
+              (import ./nix/overlays/craneLib.nix { inherit crane; })
+            ];
           };
-          inherit (pkgs.lib) toUpper removeSuffix stringAsChars recursiveMerge;
+          # Creates an attrset of derivations from a list of Cargo packages
+          buildStaticPkgs = pkgs: builtins.listToAttrs (builtins.map
+            (package: {
+              name = package;
+              value = pkgsStatic.callPackage ./nix/cargoPkgBuilder/musl.nix { inherit package; };
+            })
+            pkgs);
 
-          # For statically linked binaries
-          ccStatic = pkgs.pkgsStatic.stdenv.cc;
-          targetStatic = removeSuffix "-" ccStatic.targetPrefix;
-
-          rustToolchain = with fenix.packages.${system};
-            combine ([
-              minimal.rustc
-              minimal.cargo
-              targets.${targetStatic}.latest.rust-std
-              targets.x86_64-pc-windows-gnu.latest.rust-std
-            ]);
-
-          cargoDerivationBuilder = naersk.lib.${system}.override {
-            cargo = rustToolchain;
-            rustc = rustToolchain;
+          pkgsMingwW64 = import nixpkgs {
+            inherit localSystem;
+            crossSystem.config = "x86_64-w64-mingw32";
+            overlays = [
+              (import rust-overlay)
+              (import ./nix/overlays/craneLib.nix { inherit crane; })
+            ];
           };
-
-          # Build binary dynamically linked to system libs
-          cargoBuildPackage = package: args:
-            cargoDerivationBuilder.buildPackage (
-              recursiveMerge [
-                {
-                  root = ./.;
-                  doCheck = true;
-                  strictDeps = true;
-
-                  cargoBuildOptions = x: x ++ [ "-p" package ];
-                  cargoTestOptions = x: x ++ [ "-p" package ];
-                }
-                args
-              ]
-            );
-
-          # Build binary statically linked to system libs
-          cargoBuildPackageStatic = package: args:
-            cargoBuildPackage package (recursiveMerge [
-              {
-                nativeBuildInputs = [ ccStatic ];
-                CARGO_BUILD_TARGET = targetStatic;
-              }
-              args
-            ]);
-
-          # Cross compile to Windows
-          cargoBuildWinPackage = package: args:
-            cargoBuildPackage package (recursiveMerge [
-              {
-                depsBuildBuild = with pkgs.pkgsCross.mingwW64; [
-                  stdenv.cc
-                  windows.pthreads
-                ];
-
-                nativeBuildInputs = with pkgs;  [
-                  winePackages.minimal
-                ];
-
-                doCheck = false;
-                CARGO_BUILD_TARGET = "x86_64-pc-windows-gnu";
-                CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER = pkgs.writeScript "wine-wrapper" ''
-                  export WINEPREFIX="$(mktemp -d)"
-                  exec wine64 $@
-                '';
-              }
-            ]);
+          # Creates an attrset of derivations from a list of Cargo packages
+          buildMingwW64Pkgs = pkgs: builtins.listToAttrs (builtins.map
+            (package: {
+              name = package;
+              value = pkgsMingwW64.callPackage ./nix/cargoPkgBuilder/mingwW64.nix { inherit package; };
+            })
+            pkgs);
         in
         rec {
           legacyPackages.pkgsCross = {
-            mingwW64 = {
-              spectrometer_cli = cargoBuildWinPackage "spectrometer_cli" { };
-            };
+            mingwW64 = buildMingwW64Pkgs [ "spectrometer_cli" ];
           };
 
-          packages = {
-            spectrometer_cli = cargoBuildPackageStatic "spectrometer_cli" { };
+          checks = {
+            inherit (legacyPackages.pkgsCross.mingwW64) spectrometer_cli;
           };
 
-          defaultPackage = packages.spectrometer_cli;
-
-          devShells.default = pkgs.mkShell {
-            buildInputs = with pkgs; [
-              pkgsCross.mingwW64.stdenv.cc
-              pkgsCross.mingwW64.windows.pthreads
-              winePackages.minimal
-              rustToolchain
-            ];
+          packages = buildStaticPkgs [ "spectrometer_cli" ] // {
+            default = packages.spectrometer_cli;
           };
         }
       );

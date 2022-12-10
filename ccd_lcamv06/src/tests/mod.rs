@@ -30,7 +30,7 @@ fn decode_single_reading() {
 
 #[test]
 fn decode_stream() {
-    let res = decode_from_string(include_str!("./stream_example.txt"));
+    let res = decode_from_string(include_str!("stream_example.txt"));
     // At the very least first package should be a frame
     assert!(if let Some(Ok(Response::SingleReading(_))) = res.first() {
         true

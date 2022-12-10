@@ -3,8 +3,12 @@ mod cli;
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use num_traits::ToPrimitive;
-use simple_eyre::{eyre::eyre, Result};
-use std::{io::Write, path::Path};
+use simple_eyre::Result;
+#[cfg(target_os = "linux")]
+use simple_eyre::eyre::eyre;
+use std::io::Write;
+#[cfg(target_os = "linux")]
+use std::path::Path;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use tokio::{
     fs::{read_to_string, File},

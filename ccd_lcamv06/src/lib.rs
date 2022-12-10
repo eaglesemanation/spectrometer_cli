@@ -1,5 +1,3 @@
-#![feature(array_chunks)]
-
 mod response_parser;
 #[cfg(test)]
 mod tests;
