@@ -32,43 +32,38 @@
           pkgsX86_64LinuxStatic = import nixpkgs (commonCfg // {
             crossSystem.config = "x86_64-unknown-linux-musl";
           });
-          ccd_lcamv06_x86_64 = pkgsX86_64LinuxStatic.callPackage ./nix/cargoPackage.nix { package = "ccd_lcamv06"; };
-          spectrometer_cli_x86_64 = pkgsX86_64LinuxStatic.callPackage ./nix/cargoPackage.nix {
-            cargoArtifacts = ccd_lcamv06_x86_64;
-            package = "spectrometer_cli";
-          };
 
           pkgsAarch64LinuxStatic = import nixpkgs (commonCfg // {
             crossSystem.config = "aarch64-unknown-linux-musl";
           });
-          ccd_lcamv06_aarch64 = pkgsAarch64LinuxStatic.callPackage ./nix/cargoPackage.nix { package = "ccd_lcamv06"; };
-          spectrometer_cli_aarch64 = pkgsAarch64LinuxStatic.callPackage ./nix/cargoPackage.nix {
-            cargoArtifacts = ccd_lcamv06_aarch64;
-            package = "spectrometer_cli";
-          };
 
           pkgsMingwW64 = import nixpkgs (commonCfg // {
             crossSystem.config = "x86_64-w64-mingw32";
           });
-          ccd_lcamv06_mingwW64 = pkgsMingwW64.callPackage ./nix/cargoPackage.nix { package = "ccd_lcamv06"; };
-          spectrometer_cli_mingwW64 = pkgsMingwW64.callPackage ./nix/cargoPackage.nix {
-            cargoArtifacts = ccd_lcamv06_mingwW64;
-            package = "spectrometer_cli";
-          };
         in
         rec {
           legacyPackages.pkgsCross = {
-            x86_64-linux = {
-              ccd_lcamv06 = ccd_lcamv06_x86_64;
-              spectrometer_cli = spectrometer_cli_x86_64;
+            x86_64-linux = rec {
+              ccd_lcamv06 = pkgsX86_64LinuxStatic.callPackage ./nix/cargoPackage.nix { package = "ccd_lcamv06"; };
+              spectrometer_cli = pkgsX86_64LinuxStatic.callPackage ./nix/cargoPackage.nix {
+                cargoArtifacts = ccd_lcamv06;
+                package = "spectrometer_cli";
+              };
             };
-            aarch64-linux = {
-              ccd_lcamv06 = ccd_lcamv06_aarch64;
-              spectrometer_cli = spectrometer_cli_aarch64;
+            aarch64-linux = rec {
+              ccd_lcamv06 = pkgsAarch64LinuxStatic.callPackage ./nix/cargoPackage.nix { package = "ccd_lcamv06"; };
+              spectrometer_cli = pkgsAarch64LinuxStatic.callPackage ./nix/cargoPackage.nix {
+                cargoArtifacts = ccd_lcamv06;
+                package = "spectrometer_cli";
+              };
             };
-            mingwW64 = {
-              ccd_lcamv06 = ccd_lcamv06_mingwW64;
-              spectrometer_cli = spectrometer_cli_mingwW64;
+            mingwW64 = rec {
+              ccd_lcamv06 = pkgsMingwW64.callPackage ./nix/cargoPackage.nix { package = "ccd_lcamv06"; };
+              spectrometer_cli = pkgsMingwW64.callPackage ./nix/cargoPackage.nix {
+                cargoArtifacts = ccd_lcamv06;
+                package = "spectrometer_cli";
+              };
+
             };
           };
 
