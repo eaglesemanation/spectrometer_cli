@@ -5,26 +5,17 @@ mod tests;
 pub use response_parser::{align_response, parse_response};
 
 use bytes::{Buf, BytesMut};
-use futures::{SinkExt, StreamExt};
 use num_derive::{FromPrimitive, ToPrimitive};
-use num_traits::ToPrimitive;
-use std::{
-    fmt::{Debug, Display},
-    io,
-};
+use core::fmt::{Debug, Display};
+use std::io;
 use strum::{EnumIter, IntoEnumIterator};
 use thiserror::Error;
-use tokio_serial::{SerialPort, SerialPortBuilderExt, SerialStream};
-use tokio_util::codec::{Decoder, Encoder, Framed};
+use tokio_util::codec::{Decoder, Encoder};
 
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Baud rate is not in range of accepted values: {}", BaudRate::iter().map(|b| b.to_string()).collect::<Vec<String>>().join(", "))]
     InvalidBaudRate,
-    #[error("Could not automatically detect baud rate for selected serial device")]
-    BaudAutoDetectFailed,
-    #[error("Could not open a serial device with specified path")]
-    InvalidSerialPath,
     #[error("Could not parse recieved data correctly: {0}")]
     InvalidData(String),
     #[error("Unexpected end of package")]
@@ -189,7 +180,7 @@ pub struct VersionDetails {
 }
 
 impl Display for VersionDetails {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_fmt(format_args!(
             concat!(
                 "Hardware version: {}\n",
@@ -238,51 +229,6 @@ macro_rules! handle_ccd_response {
             None => Err($crate::Error::UnexpectedEop),
         }
     };
-}
-
-pub struct CCDConf {
-    pub baud_rate: BaudRate,
-    pub serial_path: String,
-}
-
-pub async fn try_new_ccd(conf: &CCDConf) -> Result<Framed<SerialStream, CCDCodec>, Error> {
-    let mut current_baud: Option<BaudRate> = None;
-
-    let port = tokio_serial::new(conf.serial_path.clone(), conf.baud_rate.to_u32().unwrap())
-        .open_native_async()
-        .map_err(|_| Error::InvalidSerialPath)?;
-    let mut ccd = CCDCodec.framed(port);
-
-    // Try detecting current baud rate using all supported baud rates
-    for baud in BaudRate::iter() {
-        ccd.get_mut()
-            .set_baud_rate(baud.to_u32().unwrap())
-            .map_err(|_| Error::BaudAutoDetectFailed)?;
-
-        if let Err(_) = ccd.send(Command::GetSerialBaudRate).await {
-            continue;
-        }
-
-        ccd.flush().await.map_err(|_| Error::BaudAutoDetectFailed)?;
-        let resp = ccd.next().await;
-        if let Some(Ok(Response::SerialBaudRate(b))) = resp {
-            current_baud = Some(b);
-            break;
-        }
-    }
-
-    let current_baud = current_baud.ok_or(Error::BaudAutoDetectFailed)?;
-    if current_baud != conf.baud_rate {
-        ccd.send(Command::SetSerialBaudRate(conf.baud_rate))
-            .await
-            .map_err(|_| Error::BaudAutoDetectFailed)?;
-    }
-
-    ccd.get_mut()
-        .set_baud_rate(conf.baud_rate.to_u32().unwrap())
-        .map_err(|_| Error::BaudAutoDetectFailed)?;
-    ccd.flush().await.map_err(|_| Error::BaudAutoDetectFailed)?;
-    Ok(ccd)
 }
 
 pub fn decode_from_string(single_reading_hex: &str) -> Vec<Result<Response, Error>> {

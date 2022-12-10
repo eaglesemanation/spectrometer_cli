@@ -4,13 +4,14 @@
 , windows
 , craneLib
 , package
+, cargoArtifacts ? null
 }:
 let
   target = craneLib.nix2rustTarget targetPlatform.config;
   targetCaps = lib.toUpper (lib.stringAsChars (c: if c == "-" then "_" else c) target);
 in
-craneLib.buildPackage {
-  name = package;
+craneLib.buildPackage ({
+  pname = package;
   src = craneLib.cleanCargoSource ./..;
   cargoExtraFlags = "-p ${package}";
 
@@ -25,4 +26,6 @@ craneLib.buildPackage {
   "CARGO_TARGET_${targetCaps}_LINKER" = "${stdenv.cc.targetPrefix}cc";
 
   HOST_CC = "${stdenv.cc.nativePrefix}cc";
-}
+} // lib.optionalAttrs (cargoArtifacts != null) {
+  inherit cargoArtifacts;
+})

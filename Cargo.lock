@@ -83,7 +83,6 @@ name = "ccd_lcamv06"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "futures",
  "nom",
  "num",
  "num-derive",
@@ -91,7 +90,6 @@ dependencies = [
  "strum",
  "thiserror",
  "tokio",
- "tokio-serial",
  "tokio-util",
 ]
 
@@ -746,6 +744,7 @@ dependencies = [
  "termcolor",
  "tokio",
  "tokio-serial",
+ "tokio-util",
 ]
 
 [[package]]

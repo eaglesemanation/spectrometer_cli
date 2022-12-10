@@ -3,22 +3,19 @@ mod cli;
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use num_traits::ToPrimitive;
-use simple_eyre::Result;
-#[cfg(target_os = "linux")]
-use simple_eyre::eyre::eyre;
+use simple_eyre::{eyre::eyre, Result};
 use std::io::Write;
-#[cfg(target_os = "linux")]
-use std::path::Path;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use tokio::{
     fs::{read_to_string, File},
     io::AsyncWriteExt,
     time::{sleep, Duration},
 };
-use tokio_serial::{available_ports, SerialPortInfo};
+use tokio_serial::{available_ports, SerialPortBuilderExt, SerialPortInfo, SerialStream};
+use tokio_util::codec::{Decoder, Framed};
 
 use ccd_lcamv06::{
-    decode_from_string, handle_ccd_response, try_new_ccd, BaudRate, Command as CCDCommand,
+    decode_from_string, handle_ccd_response, BaudRate, CCDCodec, Command as CCDCommand,
     Response as CCDResponse,
 };
 use cli::*;
@@ -38,6 +35,7 @@ async fn main() -> Result<()> {
         },
         Commands::BaudRate(subcomm) => match &subcomm.command {
             BaudRateCommands::Get(conf) => get_baud_rate(conf).await,
+            BaudRateCommands::Set(conf) => set_baud_rate(conf).await,
         },
         Commands::AverageTime(subcomm) => match &subcomm.command {
             AvgTimeCommands::Get(conf) => get_avg_time(conf).await,
@@ -48,6 +46,13 @@ async fn main() -> Result<()> {
             ExpTimeCommands::Set(conf) => set_exp_time(conf).await,
         },
     }
+}
+
+fn ccd_over_serial(serial_path: &str) -> Result<Framed<SerialStream, CCDCodec>> {
+    let port = tokio_serial::new(serial_path, 115200)
+        .open_native_async()
+        .map_err(|_| eyre!("Could not open serial port"))?;
+    Ok(CCDCodec.framed(port))
 }
 
 /// Returns std::io::Write stream with coloring enabled if program is run interactively
@@ -61,6 +66,8 @@ fn get_stdout() -> StandardStream {
 
 #[cfg(target_os = "linux")]
 fn port_to_path(port: &SerialPortInfo) -> Result<String> {
+    use std::path::Path;
+
     let dev_path = port
         .port_name
         .split('/')
@@ -157,7 +164,7 @@ async fn get_duration_reading(conf: &DurationReadingConf) -> Result<()> {
     let timeout = sleep(Duration::from_secs(conf.duration.into()));
     tokio::pin!(timeout);
 
-    let mut ccd = try_new_ccd(&(&conf.reading.serial).into()).await?;
+    let mut ccd = ccd_over_serial(&conf.reading.serial.serial)?;
 
     ccd.send(CCDCommand::ContinuousRead).await?;
     loop {
@@ -193,7 +200,7 @@ async fn get_duration_reading(conf: &DurationReadingConf) -> Result<()> {
 }
 
 async fn get_single_reading(conf: &SingleReadingConf) -> Result<()> {
-    let mut ccd = try_new_ccd(&(&conf.serial).into()).await?;
+    let mut ccd = ccd_over_serial(&conf.serial.serial)?;
     ccd.send(CCDCommand::SingleRead).await?;
     let frame = handle_ccd_response!(ccd.next().await, CCDResponse::SingleReading, |frame| Ok(
         frame
@@ -244,7 +251,7 @@ async fn get_hex_file_reading(conf: &HexFileReadingConf) -> Result<()> {
 }
 
 async fn get_version(conf: &SerialConf) -> Result<()> {
-    let mut ccd = try_new_ccd(&conf.into()).await?;
+    let mut ccd = ccd_over_serial(&conf.serial)?;
     ccd.send(CCDCommand::GetVersion).await?;
     handle_ccd_response!(
         ccd.next().await,
@@ -258,7 +265,7 @@ async fn get_version(conf: &SerialConf) -> Result<()> {
 }
 
 async fn get_baud_rate(conf: &SerialConf) -> Result<()> {
-    let mut ccd = try_new_ccd(&conf.into()).await?;
+    let mut ccd = ccd_over_serial(&conf.serial)?;
     ccd.send(CCDCommand::GetSerialBaudRate).await?;
     handle_ccd_response!(
         ccd.next().await,
@@ -272,8 +279,27 @@ async fn get_baud_rate(conf: &SerialConf) -> Result<()> {
     Ok(())
 }
 
+async fn set_baud_rate(conf: &SetBaudRateConf) -> Result<()> {
+    let mut ccd = ccd_over_serial(&conf.serial.serial)?;
+    ccd.send(CCDCommand::SetSerialBaudRate(conf.baud_rate))
+        .await?;
+    ccd.send(CCDCommand::GetSerialBaudRate).await?;
+    handle_ccd_response!(
+        ccd.next().await,
+        CCDResponse::SerialBaudRate,
+        |baud: BaudRate| {
+            if baud == conf.baud_rate {
+                Ok(())
+            } else {
+                Err(ccd_lcamv06::Error::InvalidBaudRate)
+            }
+        }
+    )?;
+    Ok(())
+}
+
 async fn get_avg_time(conf: &SerialConf) -> Result<()> {
-    let mut ccd = try_new_ccd(&conf.into()).await?;
+    let mut ccd = ccd_over_serial(&conf.serial)?;
     ccd.send(CCDCommand::GetAverageTime).await?;
     handle_ccd_response!(ccd.next().await, CCDResponse::AverageTime, |avg_t: u8| {
         println!("Current \"average time\": {}", avg_t);
@@ -283,14 +309,14 @@ async fn get_avg_time(conf: &SerialConf) -> Result<()> {
 }
 
 async fn set_avg_time(conf: &SetAvgTimeConf) -> Result<()> {
-    let mut ccd = try_new_ccd(&(&conf.serial).into()).await?;
+    let mut ccd = ccd_over_serial(&conf.serial.serial)?;
     ccd.send(CCDCommand::SetAverageTime(conf.average_time))
         .await?;
     Ok(())
 }
 
 async fn get_exp_time(conf: &SerialConf) -> Result<()> {
-    let mut ccd = try_new_ccd(&conf.into()).await?;
+    let mut ccd = ccd_over_serial(&conf.serial)?;
     ccd.send(CCDCommand::GetExposureTime).await?;
     handle_ccd_response!(ccd.next().await, CCDResponse::ExposureTime, |exp_t: u16| {
         println!("Current \"exposure time\": {}", exp_t);
@@ -300,7 +326,7 @@ async fn get_exp_time(conf: &SerialConf) -> Result<()> {
 }
 
 async fn set_exp_time(conf: &SetExpTimeConf) -> Result<()> {
-    let mut ccd = try_new_ccd(&(&conf.serial).into()).await?;
+    let mut ccd = ccd_over_serial(&conf.serial.serial)?;
     ccd.send(CCDCommand::SetIntegrationTime(conf.exposure_time))
         .await?;
     Ok(())
@@ -312,7 +338,8 @@ mod tests {
 
     #[test]
     fn convert_frame_to_hex() {
-        let frame: ccd_lcamv06::Frame = [u16::from_be_bytes([0xA1, 0xB2]); ccd_lcamv06::FRAME_PIXEL_COUNT];
+        let frame: ccd_lcamv06::Frame =
+            [u16::from_be_bytes([0xA1, 0xB2]); ccd_lcamv06::FRAME_PIXEL_COUNT];
         let hex = frame_to_hex(&frame);
         let hex_lines: Vec<_> = hex.split("\n").collect();
         assert_eq!(hex_lines[0], "A1B2 A1B2 A1B2 A1B2");

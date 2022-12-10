@@ -1,4 +1,4 @@
-use ccd_lcamv06::{BaudRate, CCDConf, Error};
+use ccd_lcamv06::{BaudRate, Error};
 use clap::{Args, Parser, Subcommand};
 use num_traits::FromPrimitive;
 
@@ -14,25 +14,6 @@ pub struct SerialConf {
     /// Name of serial port that should be used
     #[clap(short, long, value_parser)]
     pub serial: String,
-    /// Which baud rate to use
-    #[clap(short, long, value_parser = parse_baud_rate)]
-    pub baud_rate: Option<BaudRate>,
-}
-
-impl From<&SerialConf> for CCDConf {
-    fn from(serial: &SerialConf) -> Self {
-        CCDConf {
-            baud_rate: serial.baud_rate.unwrap_or(BaudRate::default()),
-            serial_path: serial.serial.clone(),
-        }
-    }
-}
-
-fn parse_baud_rate(s: &str) -> Result<BaudRate, Error> {
-    s.parse()
-        .or(Err(()))
-        .and_then(|n| FromPrimitive::from_u32(n).ok_or(()))
-        .map_err(|_| Error::InvalidBaudRate)
 }
 
 #[derive(Subcommand)]
@@ -43,7 +24,7 @@ pub enum Commands {
     CCDVersion(SerialConf),
     /// Get readings from spectrometer
     Read(ReadCommand),
-    /// Baud rate related commands
+    /// Configure baud rate for UART, which is separate from USB port
     BaudRate(BaudRateCommand),
     /// "Average time" related commands, not sure what that really means
     AverageTime(AvgTimeCommand),
@@ -75,10 +56,6 @@ pub enum OutputFormat {
 
 #[derive(Args)]
 pub struct HexFileReadingConf {
-    /// Input file with hex encoded byte sequence
-    #[clap(short, long, value_parser, value_hint = clap::ValueHint::FilePath)]
-    pub input: String,
-
     /// Path to a file where readings should be stored
     #[clap(short, long, value_parser, value_hint = clap::ValueHint::FilePath)]
     pub output: String,
@@ -86,6 +63,10 @@ pub struct HexFileReadingConf {
     /// File format for reading output
     #[clap(long, value_enum, default_value = "csv")]
     pub format: OutputFormat,
+
+    /// Input file with hex encoded byte sequence
+    #[clap(short, long, value_parser, value_hint = clap::ValueHint::FilePath)]
+    pub input: String,
 }
 
 #[derive(Args)]
@@ -122,6 +103,24 @@ pub struct BaudRateCommand {
 pub enum BaudRateCommands {
     /// Get current baud rate
     Get(SerialConf),
+    /// Set baud rate
+    Set(SetBaudRateConf),
+}
+
+#[derive(Args)]
+pub struct SetBaudRateConf {
+    /// New baud rate on UART
+    #[clap(value_parser = parse_baud_rate)]
+    pub baud_rate: BaudRate,
+    #[clap(flatten)]
+    pub serial: SerialConf,
+}
+
+fn parse_baud_rate(s: &str) -> Result<BaudRate, Error> {
+    s.parse()
+        .or(Err(()))
+        .and_then(|n| FromPrimitive::from_u32(n).ok_or(()))
+        .map_err(|_| Error::InvalidBaudRate)
 }
 
 #[derive(Args)]
