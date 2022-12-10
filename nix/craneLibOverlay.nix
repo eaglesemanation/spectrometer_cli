@@ -28,7 +28,6 @@ let
 in
 {
   craneLib = craneLib // { 
-    # Include all files under assets/ and tests/
-    inherit cleanCargoSource;
+    inherit cleanCargoSource nix2rustTarget;
   };
 }

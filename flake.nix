@@ -15,55 +15,47 @@
   outputs = { self, rust-overlay, crane, utils, nixpkgs }:
     utils.lib.eachSystem
       (builtins.attrValues {
-        # For now only support building from x64 Linux
-        inherit (utils.lib.system) x86_64-linux;
+        # For now only support building from Linux
+        inherit (utils.lib.system) x86_64-linux aarch64-linux;
       })
       (localSystem:
         let
-          staticTarget = nixpkgs.legacyPackages.${localSystem}.pkgsStatic.targetPlatform.config;
-
-          pkgsStatic = import nixpkgs {
+          commonCfg = {
             inherit localSystem;
-            crossSystem.config = staticTarget;
             overlays = [
               (import rust-overlay)
-              (import ./nix/overlays/craneLib.nix { inherit crane; })
+              # Adds pkgs.craneLib with rust toolchain for cross compilation
+              (import ./nix/craneLibOverlay.nix { inherit crane; })
             ];
           };
-          # Creates an attrset of derivations from a list of Cargo packages
-          buildStaticPkgs = pkgs: builtins.listToAttrs (builtins.map
-            (package: {
-              name = package;
-              value = pkgsStatic.callPackage ./nix/cargoPkgBuilder/musl.nix { inherit package; };
-            })
-            pkgs);
 
-          pkgsMingwW64 = import nixpkgs {
-            inherit localSystem;
+          pkgsX86_64LinuxStatic = import nixpkgs (commonCfg // {
+            crossSystem.config = "x86_64-unknown-linux-musl";
+          });
+
+          pkgsAarch64LinuxStatic = import nixpkgs (commonCfg // {
+            crossSystem.config = "aarch64-unknown-linux-musl";
+          });
+
+          pkgsMingwW64 = import nixpkgs (commonCfg // {
             crossSystem.config = "x86_64-w64-mingw32";
-            overlays = [
-              (import rust-overlay)
-              (import ./nix/overlays/craneLib.nix { inherit crane; })
-            ];
-          };
-          # Creates an attrset of derivations from a list of Cargo packages
-          buildMingwW64Pkgs = pkgs: builtins.listToAttrs (builtins.map
-            (package: {
-              name = package;
-              value = pkgsMingwW64.callPackage ./nix/cargoPkgBuilder/mingwW64.nix { inherit package; };
-            })
-            pkgs);
+          });
         in
         rec {
           legacyPackages.pkgsCross = {
-            mingwW64 = buildMingwW64Pkgs [ "spectrometer_cli" ];
+            mingwW64 = {
+              spectrometer_cli = pkgsMingwW64.callPackage ./nix/cargoPackage.nix { package = "spectrometer_cli"; };
+            };
+            x86_64-linux = {
+              spectrometer_cli = pkgsX86_64LinuxStatic.callPackage ./nix/cargoPackage.nix { package = "spectrometer_cli"; };
+            };
+            aarch64-linux = {
+              spectrometer_cli = pkgsAarch64LinuxStatic.callPackage ./nix/cargoPackage.nix { package = "spectrometer_cli"; };
+            };
           };
 
-          checks = {
-            inherit (legacyPackages.pkgsCross.mingwW64) spectrometer_cli;
-          };
-
-          packages = buildStaticPkgs [ "spectrometer_cli" ] // {
+          packages = {
+            spectrometer_cli = legacyPackages.pkgsCross.${localSystem}.spectrometer_cli;
             default = packages.spectrometer_cli;
           };
         }
