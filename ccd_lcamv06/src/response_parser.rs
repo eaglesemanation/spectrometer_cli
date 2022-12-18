@@ -1,5 +1,4 @@
-use core::ops::RangeFrom;
-use core::str::from_utf8;
+use core::{num::NonZeroUsize, ops::RangeFrom, str::from_utf8};
 
 use nom::{
     branch::alt,
@@ -11,7 +10,7 @@ use nom::{
     IResult, InputIter, InputLength, Slice,
 };
 
-use super::{BaudRate, Response, VersionDetails, FRAME_TOTAL_COUNT};
+use crate::types::{BaudRate, Response, VersionDetails, FRAME_TOTAL_COUNT};
 
 fn is_separator(c: u8) -> bool {
     c == b' ' || c == b','
@@ -28,30 +27,26 @@ fn version_response_prefix(input: &[u8]) -> IResult<&[u8], ()> {
 }
 
 fn version_response(input: &[u8]) -> IResult<&[u8], Response> {
-    let (input, (_, hardware_version, sensor_type, firmware_version, serial_number)) =
-        tuple((
-            // Prefix
-            version_response_prefix,
-            // Hardware info
-            word_with_separator,
-            // Sensor type
-            word_with_separator,
-            // Firmware version
-            word_with_separator,
-            // Serial number, should be a timestamp
-            take("202111161548".len()),
-        ))(input)?;
-    // TODO: Handle error
-    let serial_number = from_utf8(serial_number).unwrap();
+    let (input, (_, hw_ver, sensor, fw_ver, serial)) = tuple((
+        // Prefix
+        version_response_prefix,
+        // Hardware info
+        word_with_separator,
+        // Sensor type
+        word_with_separator,
+        // Firmware version
+        word_with_separator,
+        // Serial number, should be a timestamp
+        take("202111161548".len()),
+    ))(input)?;
 
+    // TODO: Handle error
+    let serial = from_utf8(serial).unwrap();
+
+    // TODO: Handle error
     Ok((
         input,
-        Response::VersionInfo(VersionDetails {
-            hardware_version: hardware_version.to_string(),
-            sensor_type: sensor_type.to_string(),
-            firmware_version: firmware_version.to_string(),
-            serial_number: serial_number.to_string(),
-        }),
+        Response::VersionInfo(VersionDetails::try_new(hw_ver, sensor, fw_ver, serial).unwrap()),
     ))
 }
 
@@ -111,6 +106,13 @@ fn single_frame_parser(input: &[u8]) -> IResult<&[u8], Response> {
         )));
     }
     let (input, _) = u8_satisfy(|b| b == 0x00)(input)?;
+    // Check if buffer has all data required + a byte for CRC
+    const REMAINING_LEN: usize = (FRAME_TOTAL_COUNT + 1) * 2;
+    if input.len() < REMAINING_LEN {
+        // Can safely unwrap due to check
+        let needed = NonZeroUsize::new(REMAINING_LEN - input.len()).unwrap();
+        return Err(nom::Err::Incomplete(nom::Needed::Size(needed)));
+    }
 
     // Calculate CRC on individual bytes, each pixel is 2 bytes long
     let _crc = input[..FRAME_TOTAL_COUNT * 2]
@@ -169,10 +171,13 @@ pub fn parse_response(input: &[u8]) -> IResult<&[u8], Response> {
 
 #[cfg(test)]
 mod tests {
+    use crate::error::Error;
+
     use super::*;
     use nom::{
-        error::{Error, ErrorKind},
+        error::{make_error, ErrorKind},
         Needed,
+        Err::Incomplete
     };
 
     #[test]
@@ -182,15 +187,12 @@ mod tests {
         // Invalid prefix
         assert_eq!(
             binary_response_prefix(&[0x80u8]),
-            Err(nom::Err::Error(Error {
-                input: [0x80u8].as_slice(),
-                code: ErrorKind::Digit
-            }))
+            Err(nom::Err::Error(make_error([0x80u8].as_slice(), ErrorKind::Digit)))
         );
         // Prefix did not arrive yet
         assert_eq!(
             binary_response_prefix(&[] as &[u8]),
-            Err(nom::Err::Incomplete(Needed::new(1)))
+            Err(Incomplete(Needed::new(1)))
         );
     }
 
@@ -233,6 +235,11 @@ mod tests {
             align_response("   HdInfo:".as_bytes()),
             Ok(("HdInfo:".as_bytes(), ()))
         );
+        // Don't do anything if package is already aligned
+        assert_eq!(
+            align_response("HdInfo:".as_bytes()),
+            Ok(("HdInfo:".as_bytes(), ()))
+        );
         assert_eq!(
             align_response(&([0xDE, 0xAD, 0xBE, 0xEF, 0x81] as [u8; 5])),
             Ok((&[0x81u8] as &[u8], ()))
@@ -240,7 +247,7 @@ mod tests {
         // Allow any kind of garbage until known valid response arrives
         assert_eq!(
             align_response("   HDInfo:".as_bytes()),
-            Err(nom::Err::Incomplete(Needed::Unknown))
+            Err(Incomplete(Needed::Unknown))
         );
     }
 
@@ -251,12 +258,12 @@ mod tests {
             version_response("HdInfo:LCAM_V8.4.2,S11639,V4.2,202111161548".as_bytes()),
             Ok((
                 "".as_bytes(),
-                Response::VersionInfo(VersionDetails {
-                    hardware_version: "LCAM_V8.4.2".to_string(),
-                    sensor_type: "S11639".to_string(),
-                    firmware_version: "V4.2".to_string(),
-                    serial_number: "202111161548".to_string(),
-                })
+                Response::VersionInfo(VersionDetails::try_new(
+                    "LCAM_V8.4.2",
+                    "S11639",
+                    "V4.2",
+                    "202111161548"
+                ).unwrap())
             ))
         );
     }
