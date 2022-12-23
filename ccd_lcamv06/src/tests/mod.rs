@@ -6,6 +6,8 @@ use crate::{
 
 use nom::{Err::Incomplete, Needed};
 
+use pretty_assertions::assert_eq;
+
 #[test]
 fn decode_single_package() {
     let res = decode_from_string(include_str!("single_package_example.txt")).unwrap();

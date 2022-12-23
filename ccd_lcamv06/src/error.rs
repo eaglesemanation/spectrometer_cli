@@ -10,5 +10,9 @@ pub enum Error {
     #[error("Unexpected end of package")]
     UnexpectedEop,
     #[error("{0} is longer than expected")]
-    VersionDetailTooLong(&'static str)
+    VersionDetailTooLong(&'static str),
+
+    #[cfg(feature = "std")]
+    #[error("{0}")]
+    IOError(#[from] std::io::Error),
 }

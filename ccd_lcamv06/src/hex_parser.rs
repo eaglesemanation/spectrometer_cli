@@ -40,6 +40,7 @@ pub fn decode_from_string(input: &str) -> Result<Vec<Response>, Error> {
 mod tests {
     use super::*;
     use nom::{error::{make_error, ErrorKind}, Err::Error};
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn hex_byte_parser() {

@@ -171,14 +171,13 @@ pub fn parse_response(input: &[u8]) -> IResult<&[u8], Response> {
 
 #[cfg(test)]
 mod tests {
-    use crate::error::Error;
-
     use super::*;
     use nom::{
         error::{make_error, ErrorKind},
         Needed,
         Err::Incomplete
     };
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn decode_binary_prefix() {

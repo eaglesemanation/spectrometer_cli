@@ -1,10 +1,18 @@
 { lib
+
+# Cross-compilation detection
 , stdenv
 , targetPlatform
 , windows
+
+# Rust cargo wrapping
 , craneLib
 , package
+
+# Per package arguments
 , cargoArtifacts ? null
+, nativeBuildInputs ? []
+, buildInputs ? []
 }:
 let
   target = craneLib.nix2rustTarget targetPlatform.config;
@@ -15,8 +23,9 @@ craneLib.buildPackage ({
   src = craneLib.cleanCargoSource ./..;
   cargoExtraFlags = "-p ${package}";
 
-  buildInputs = [
-  ]
+  inherit nativeBuildInputs;
+
+  buildInputs = buildInputs
   ++ lib.optionals (targetPlatform.isWindows) [
     windows.pthreads
   ];
