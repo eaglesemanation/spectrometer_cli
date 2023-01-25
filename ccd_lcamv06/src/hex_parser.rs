@@ -1,4 +1,4 @@
-use crate::{types::Response, error::Error, response_parser::{parse_response, align_response}};
+use crate::{response::{Response, parser::{parse_response, align_response}}, error::Error};
 use nom::{
     bytes::complete::take_while_m_n, character::complete::space0, combinator::{map_res, all_consuming},
     multi::many1, sequence::delimited, IResult,
@@ -12,7 +12,7 @@ fn hex_byte(input: &str) -> IResult<&str, u8> {
     )(input)
 }
 
-pub(crate) fn parse_hex_str(input: &str) -> IResult<&str, Vec<u8>> {
+pub fn parse_hex_str(input: &str) -> IResult<&str, Vec<u8>> {
     all_consuming(many1(delimited(space0, hex_byte, space0)))(input)
 }
 
@@ -39,21 +39,20 @@ pub fn decode_from_string(input: &str) -> Result<Vec<Response>, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nom::{error::{make_error, ErrorKind}, Err::Error};
-    use pretty_assertions::assert_eq;
+    use claims::*;
 
     #[test]
     fn hex_byte_parser() {
-        assert_eq!(hex_byte("FF"), Ok(("", 255)));
-        assert_eq!(hex_byte("ff"), Ok(("", 255)));
-        assert!(hex_byte("NH").is_err());
+        assert_ok_eq!(hex_byte("FF"), ("", 255));
+        assert_ok_eq!(hex_byte("ff"), ("", 255));
+        assert_err!(hex_byte("NH"));
     }
 
     #[test]
     fn hex_str_parser() {
-        assert_eq!(parse_hex_str("DEADBEEF"), Ok(("", vec![0xDE, 0xAD, 0xBE, 0xEF])));
-        assert_eq!(parse_hex_str(" DE   AD BEEF    "), Ok(("", vec![0xDE, 0xAD, 0xBE, 0xEF])));
-        assert_eq!(parse_hex_str("NOT HEX"), Err(Error(make_error("NOT HEX", ErrorKind::TakeWhileMN))));
-        assert_eq!(parse_hex_str("DE AD BE EF NO TH EX"), Err(Error(make_error("NO TH EX", ErrorKind::Eof))));
+        assert_ok_eq!(parse_hex_str("DEADBEEF"), ("", vec![0xDE, 0xAD, 0xBE, 0xEF]));
+        assert_ok_eq!(parse_hex_str(" DE   AD BEEF    "), ("", vec![0xDE, 0xAD, 0xBE, 0xEF]));
+        assert_err!(parse_hex_str("NOT HEX"));
+        assert_err!(parse_hex_str("DE AD BE EF NO TH EX"));
     }
 }

@@ -1,13 +1,10 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![feature(error_in_core)]
 
-mod command_encoder;
-mod response_parser;
-
-pub mod types;
 pub mod error;
-// TODO: Move to separate crate
-pub mod codec;
+pub mod config;
+pub mod command;
+pub mod response;
 
 #[cfg(feature = "std")]
 pub mod hex_parser;

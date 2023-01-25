@@ -1,54 +1,16 @@
-use core::{num::NonZeroUsize, ops::RangeFrom, str::from_utf8};
+use core::{num::NonZeroUsize, ops::RangeFrom};
 
 use nom::{
     branch::alt,
-    bytes::streaming::{tag, take, take_till1, take_while1},
     combinator::{map, peek},
     multi::fill,
     number::streaming::{be_u16, be_u8},
-    sequence::{terminated, tuple},
     IResult, InputIter, InputLength, Slice,
 };
 
-use crate::types::{BaudRate, Response, VersionDetails, FRAME_TOTAL_COUNT};
-
-fn is_separator(c: u8) -> bool {
-    c == b' ' || c == b','
-}
-
-fn word_with_separator<'a>(input: &[u8]) -> IResult<&[u8], &str> {
-    let (input, b) = terminated(take_till1(is_separator), take_while1(is_separator))(input)?;
-    // TODO: Handle error
-    Ok((input, from_utf8(b).unwrap()))
-}
-
-fn version_response_prefix(input: &[u8]) -> IResult<&[u8], ()> {
-    map(tag("HdInfo:"), |_| ())(input)
-}
-
-fn version_response(input: &[u8]) -> IResult<&[u8], Response> {
-    let (input, (_, hw_ver, sensor, fw_ver, serial)) = tuple((
-        // Prefix
-        version_response_prefix,
-        // Hardware info
-        word_with_separator,
-        // Sensor type
-        word_with_separator,
-        // Firmware version
-        word_with_separator,
-        // Serial number, should be a timestamp
-        take("202111161548".len()),
-    ))(input)?;
-
-    // TODO: Handle error
-    let serial = from_utf8(serial).unwrap();
-
-    // TODO: Handle error
-    Ok((
-        input,
-        Response::VersionInfo(VersionDetails::try_new(hw_ver, sensor, fw_ver, serial).unwrap()),
-    ))
-}
+use crate::config::BaudRate;
+use super::version_parser::*;
+use super::{Response, FRAME_TOTAL_COUNT};
 
 /// byte version of nom::character::streaming::satisfy
 fn u8_satisfy<F, I, E: nom::error::ParseError<I>>(cond: F) -> impl Fn(I) -> IResult<I, u8, E>
@@ -66,23 +28,12 @@ where
     }
 }
 
-fn binary_response_prefix(input: &[u8]) -> IResult<&[u8], ()> {
+fn package_prefix(input: &[u8]) -> IResult<&[u8], ()> {
     map(u8_satisfy(|b| b == 0x81), |_| ())(input)
 }
 
-/// Takes a byte slice and drops bytes until first valid prefix of a response
-pub fn align_response(input: &[u8]) -> IResult<&[u8], ()> {
-    for i in 0..input.len() {
-        match peek(alt((binary_response_prefix, version_response_prefix)))(&input[i..]) {
-            Ok(_) => return Ok((&input[i..], ())),
-            _ => {}
-        }
-    }
-    Err(nom::Err::Incomplete(nom::Needed::Unknown))
-}
-
-fn binary_response(input: &[u8]) -> IResult<&[u8], Response> {
-    let (input, _) = binary_response_prefix(input)?;
+fn package_parser(input: &[u8]) -> IResult<&[u8], Response> {
+    let (input, _) = package_prefix(input)?;
     let (input, cmd) = be_u8(input)?;
     match cmd {
         0x01 => single_frame_parser(input),
@@ -163,107 +114,92 @@ fn serial_baud_rate_parser(input: &[u8]) -> IResult<&[u8], Response> {
     }
 }
 
+/// Takes a byte slice and drops bytes until first valid prefix of a response
+pub fn align_response(input: &[u8]) -> IResult<&[u8], ()> {
+    for i in 0..input.len() {
+        match peek(alt((package_prefix, version_details_prefix)))(&input[i..]) {
+            Ok(_) => return Ok((&input[i..], ())),
+            _ => {}
+        }
+    }
+    Err(nom::Err::Incomplete(nom::Needed::Unknown))
+}
+
 /// Takes aligned input and parses it as either as a byte stream, or as plain text in case of
 /// version info response
 pub fn parse_response(input: &[u8]) -> IResult<&[u8], Response> {
-    alt((binary_response, version_response))(input)
+    alt((
+        package_parser,
+        map(version_details_parser, |vd| Response::VersionInfo(vd)),
+    ))(input)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nom::{
-        error::{make_error, ErrorKind},
-        Needed,
-        Err::Incomplete
-    };
-    use pretty_assertions::assert_eq;
+    use BaudRate::*;
+    use claims::*;
+    use nom::{Err::Incomplete, Needed};
 
     #[test]
-    fn decode_binary_prefix() {
+    fn decode_package_prefix() {
         // Expected prefix
-        assert_eq!(binary_response_prefix(&[0x81u8]), Ok(((&[] as &[u8]), ())));
+        assert_eq!(package_prefix(&[0x81u8]), Ok(((&[] as &[u8]), ())));
         // Invalid prefix
-        assert_eq!(
-            binary_response_prefix(&[0x80u8]),
-            Err(nom::Err::Error(make_error([0x80u8].as_slice(), ErrorKind::Digit)))
-        );
+        assert_err!(package_prefix(&[0x80u8]));
         // Prefix did not arrive yet
-        assert_eq!(
-            binary_response_prefix(&[] as &[u8]),
-            Err(Incomplete(Needed::new(1)))
-        );
+        assert_err_eq!(package_prefix(&[] as &[u8]), Incomplete(Needed::new(1)));
     }
 
     #[test]
     fn decode_baud_rate() {
-        assert_eq!(
-            binary_response(&[0x81u8, 0x16, 0x01, 0x00, 0xFF]),
-            Ok((
-                (&[] as &[u8]),
-                Response::SerialBaudRate(BaudRate::Baud115200)
-            ))
+        assert_ok_eq!(
+            package_parser(&[0x81u8, 0x16, 0x01, 0x00, 0xFF]),
+            (&[] as &[u8], Response::SerialBaudRate(Baud115200))
         );
         // Invalid baud rate code
-        assert!(binary_response(&[0x81u8, 0x16, 0xFF, 0x00, 0xFF]).is_err());
+        assert_err!(package_parser(&[0x81u8, 0x16, 0xFF, 0x00, 0xFF]));
     }
 
     #[test]
     fn decode_exposure_time() {
-        assert_eq!(
-            binary_response(&[0x81u8, 0x02, 0xAB, 0xCD, 0xFF]),
-            Ok(((&[] as &[u8]), Response::ExposureTime(0xABCD)))
+        assert_ok_eq!(
+            package_parser(&[0x81u8, 0x02, 0xAB, 0xCD, 0xFF]),
+            (&[] as &[u8], Response::ExposureTime(0xABCD))
         );
         // Invalid suffix
-        assert!(binary_response(&[0x81, 0x02, 0xAB, 0xCD, 0x00]).is_err());
+        assert_err!(package_parser(&[0x81, 0x02, 0xAB, 0xCD, 0x00]));
     }
 
     #[test]
     fn decode_average_time() {
-        assert_eq!(
-            binary_response(&[0x81u8, 0x0E, 0xAB, 0x00, 0xFF]),
-            Ok(((&[] as &[u8]), Response::AverageTime(0xAB)))
+        assert_ok_eq!(
+            package_parser(&[0x81u8, 0x0E, 0xAB, 0x00, 0xFF]),
+            (&[] as &[u8], Response::AverageTime(0xAB))
         );
         // Incorrect low byte
-        assert!(binary_response(&[0x81u8, 0x0E, 0xAB, 0xCD, 0xFF]).is_err());
+        assert_err!(package_parser(&[0x81u8, 0x0E, 0xAB, 0xCD, 0xFF]));
     }
 
     #[test]
     fn test_align_response() {
-        assert_eq!(
+        assert_ok_eq!(
             align_response("   HdInfo:".as_bytes()),
-            Ok(("HdInfo:".as_bytes(), ()))
+            ("HdInfo:".as_bytes(), ())
         );
         // Don't do anything if package is already aligned
-        assert_eq!(
+        assert_ok_eq!(
             align_response("HdInfo:".as_bytes()),
-            Ok(("HdInfo:".as_bytes(), ()))
+            ("HdInfo:".as_bytes(), ())
         );
-        assert_eq!(
+        assert_ok_eq!(
             align_response(&([0xDE, 0xAD, 0xBE, 0xEF, 0x81] as [u8; 5])),
-            Ok((&[0x81u8] as &[u8], ()))
+            (&[0x81u8] as &[u8], ())
         );
         // Allow any kind of garbage until known valid response arrives
-        assert_eq!(
+        assert_err_eq!(
             align_response("   HDInfo:".as_bytes()),
-            Err(Incomplete(Needed::Unknown))
-        );
-    }
-
-    #[test]
-    fn decode_version_info() {
-        assert_eq!(
-            // Encoded Response::VersionInfo
-            version_response("HdInfo:LCAM_V8.4.2,S11639,V4.2,202111161548".as_bytes()),
-            Ok((
-                "".as_bytes(),
-                Response::VersionInfo(VersionDetails::try_new(
-                    "LCAM_V8.4.2",
-                    "S11639",
-                    "V4.2",
-                    "202111161548"
-                ).unwrap())
-            ))
+            Incomplete(Needed::Unknown)
         );
     }
 }
