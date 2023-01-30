@@ -1,4 +1,4 @@
-use ccd_lcamv06::{BaudRate, Error};
+use ccd_lcamv06::{BaudRate, error::Error};
 use clap::{Args, Parser, Subcommand};
 use num_traits::FromPrimitive;
 
@@ -42,31 +42,14 @@ pub struct ReadCommand {
 pub enum ReadCommands {
     /// Get a single frame
     Single(SingleReadingConf),
-    /// Continuously get readings for specified duration
-    Duration(DurationReadingConf),
-    /// Read from a file with hex encoded package with single reading
-    HexFile(HexFileReadingConf),
+    // Continuously get readings for specified duration
+    //Duration(DurationReadingConf),
 }
 
 #[derive(clap::ArgEnum, Clone)]
 pub enum OutputFormat {
     CSV,
     Hex,
-}
-
-#[derive(Args)]
-pub struct HexFileReadingConf {
-    /// Path to a file where readings should be stored
-    #[clap(short, long, value_parser, value_hint = clap::ValueHint::FilePath)]
-    pub output: String,
-
-    /// File format for reading output
-    #[clap(long, value_enum, default_value = "csv")]
-    pub format: OutputFormat,
-
-    /// Input file with hex encoded byte sequence
-    #[clap(short, long, value_parser, value_hint = clap::ValueHint::FilePath)]
-    pub input: String,
 }
 
 #[derive(Args)]

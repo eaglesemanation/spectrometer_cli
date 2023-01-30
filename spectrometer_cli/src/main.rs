@@ -1,58 +1,52 @@
 mod cli;
 
 use clap::Parser;
-use futures::{SinkExt, StreamExt};
 use num_traits::ToPrimitive;
 use simple_eyre::{eyre::eyre, Result};
-use std::io::Write;
+use std::{
+    io::Write,
+    fs::File
+};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
-use tokio::{
-    fs::{read_to_string, File},
-    io::AsyncWriteExt,
-    time::{sleep, Duration},
-};
-use tokio_serial::{available_ports, SerialPortBuilderExt, SerialPortInfo, SerialStream};
-use tokio_util::codec::{Decoder, Framed};
+use serialport::SerialPort;
 
-use ccd_lcamv06::{
-    decode_from_string, handle_ccd_response, BaudRate, CCDCodec, Command as CCDCommand,
-    Response as CCDResponse,
-};
+use ccd_lcamv06::{CCD, BaudRate, Frame};
 use cli::*;
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     simple_eyre::install()?;
     let cli = Cli::parse();
 
     match &cli.command {
         Commands::List => list_serial(),
-        Commands::CCDVersion(conf) => get_version(conf).await,
+        Commands::CCDVersion(conf) => get_version(conf),
         Commands::Read(subcomm) => match &subcomm.command {
-            ReadCommands::Single(conf) => get_single_reading(conf).await,
-            ReadCommands::Duration(conf) => get_duration_reading(conf).await,
-            ReadCommands::HexFile(conf) => get_hex_file_reading(conf).await,
+            ReadCommands::Single(conf) => get_single_reading(conf),
+            //ReadCommands::Duration(conf) => get_duration_reading(conf),
         },
         Commands::BaudRate(subcomm) => match &subcomm.command {
-            BaudRateCommands::Get(conf) => get_baud_rate(conf).await,
-            BaudRateCommands::Set(conf) => set_baud_rate(conf).await,
+            BaudRateCommands::Get(conf) => get_baud_rate(conf),
+            BaudRateCommands::Set(conf) => set_baud_rate(conf),
         },
         Commands::AverageTime(subcomm) => match &subcomm.command {
-            AvgTimeCommands::Get(conf) => get_avg_time(conf).await,
-            AvgTimeCommands::Set(conf) => set_avg_time(conf).await,
+            AvgTimeCommands::Get(conf) => get_avg_time(conf),
+            AvgTimeCommands::Set(conf) => set_avg_time(conf),
         },
         Commands::ExposureTime(subcomm) => match &subcomm.command {
-            ExpTimeCommands::Get(conf) => get_exp_time(conf).await,
-            ExpTimeCommands::Set(conf) => set_exp_time(conf).await,
+            ExpTimeCommands::Get(conf) => get_exp_time(conf),
+            ExpTimeCommands::Set(conf) => set_exp_time(conf),
         },
     }
 }
 
-fn ccd_over_serial(serial_path: &str) -> Result<Framed<SerialStream, CCDCodec>> {
-    let port = tokio_serial::new(serial_path, 115200)
-        .open_native_async()
-        .map_err(|_| eyre!("Could not open serial port"))?;
-    Ok(CCDCodec.framed(port))
+fn ccd_over_serial(serial_path: &str) -> Result<CCD<Box<dyn SerialPort>>> {
+    let port = serialport::new(
+        serial_path,
+        ToPrimitive::to_u32(&BaudRate::default()).unwrap(),
+    )
+    .open()
+    .map_err(|_| eyre!("Could not open serial port"))?;
+    Ok(CCD::new(port))
 }
 
 /// Returns std::io::Write stream with coloring enabled if program is run interactively
@@ -64,42 +58,9 @@ fn get_stdout() -> StandardStream {
     })
 }
 
-#[cfg(target_os = "linux")]
-fn port_to_path(port: &SerialPortInfo) -> Result<String> {
-    use std::path::Path;
-
-    let dev_path = port
-        .port_name
-        .split('/')
-        .last()
-        .map(|d| format!("/dev/{}", d))
-        .ok_or(eyre!("Could not map /sys/class/tty to /dev"))?;
-    if Path::new(dev_path.as_str()).exists() {
-        Ok(dev_path)
-    } else {
-        // It's quite possibe that udev can rename tty devices while mapping from /sys to /dev, but
-        // I just don't want to link against libudev, this is supposed to be a small static project
-        Err(eyre!(
-            "Could not find port {}, even though {} exists",
-            dev_path,
-            port.port_name
-        ))
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn port_to_path(port: &SerialPortInfo) -> Result<String> {
-    Ok(port.port_name.clone())
-}
-
-fn get_port_paths() -> Result<Vec<String>> {
-    let ports = available_ports()?;
-    ports.iter().map(port_to_path).collect()
-}
-
 fn list_serial() -> Result<()> {
     let mut stdout = get_stdout();
-    let paths = get_port_paths()?;
+    let paths = serialport::available_ports()?;
     if paths.is_empty() {
         stdout.set_color(ColorSpec::new().set_fg(Some(Color::Red)))?;
         writeln!(&mut stdout, "No connected serial ports found.")?;
@@ -108,12 +69,12 @@ fn list_serial() -> Result<()> {
         writeln!(&mut stdout, "Connected serial ports:")?;
     }
     stdout.reset()?;
-    paths.iter().for_each(|p| println!("{}", p));
+    paths.iter().for_each(|p| println!("{}", p.port_name));
 
     Ok(())
 }
 
-fn frame_to_hex(frame: &ccd_lcamv06::Frame) -> String {
+fn frame_to_hex(frame: &Frame) -> String {
     frame
         // Split frame into 4 word lines
         .chunks(4)
@@ -133,7 +94,8 @@ fn frame_to_hex(frame: &ccd_lcamv06::Frame) -> String {
         .join("\n")
 }
 
-fn frames_to_hex(frames: &[ccd_lcamv06::Frame]) -> String {
+/*
+fn frames_to_hex(frames: &[Frame]) -> String {
     frames
         .iter()
         .map(frame_to_hex)
@@ -141,8 +103,9 @@ fn frames_to_hex(frames: &[ccd_lcamv06::Frame]) -> String {
         // Separate each frame by 2 empty lines
         .join("\n\n\n")
 }
+*/
 
-fn frame_to_csv(frame: &ccd_lcamv06::Frame) -> String {
+fn frame_to_csv(frame: &Frame) -> String {
     frame
         .iter()
         .map(|pixel| pixel.to_string())
@@ -150,16 +113,19 @@ fn frame_to_csv(frame: &ccd_lcamv06::Frame) -> String {
         .join(",")
 }
 
-fn frames_to_csv(frames: &[ccd_lcamv06::Frame]) -> String {
+/*
+fn frames_to_csv(frames: &[Frame]) -> String {
     frames
         .iter()
         .map(frame_to_csv)
         .collect::<Vec<_>>()
         .join("\n")
 }
+*/
 
+/*
 /// Gets readings for specified duration of time
-async fn get_duration_reading(conf: &DurationReadingConf) -> Result<()> {
+fn get_duration_reading(conf: &DurationReadingConf) -> Result<()> {
     let mut frames: Vec<_> = Vec::new();
     let timeout = sleep(Duration::from_secs(conf.duration.into()));
     tokio::pin!(timeout);
@@ -198,148 +164,78 @@ async fn get_duration_reading(conf: &DurationReadingConf) -> Result<()> {
 
     Ok(())
 }
+*/
 
-async fn get_single_reading(conf: &SingleReadingConf) -> Result<()> {
+fn get_single_reading(conf: &SingleReadingConf) -> Result<()> {
     let mut ccd = ccd_over_serial(&conf.serial.serial)?;
-    ccd.send(CCDCommand::SingleRead).await?;
-    let frame = handle_ccd_response!(ccd.next().await, CCDResponse::SingleReading, |frame| Ok(
-        frame
-    ))?;
+    let frame = ccd.get_frame()?;
 
-    match conf.format {
+    let mut out = File::create(&conf.output)?;
+    let data = match conf.format {
         OutputFormat::CSV => {
-            let mut out = File::create(&conf.output).await?;
-            out.write_all(frame_to_csv(&frame).as_bytes()).await?;
+            frame_to_csv(&frame)
         }
         OutputFormat::Hex => {
-            let mut out = File::create(&conf.output).await?;
-            out.write_all(frame_to_hex(&frame).as_bytes()).await?;
+            frame_to_hex(&frame)
         }
     };
-
+    out.write_all(&data.as_bytes())?;
     Ok(())
 }
 
-async fn get_hex_file_reading(conf: &HexFileReadingConf) -> Result<()> {
-    let input_str = read_to_string(&conf.input).await?;
-    let responses = decode_from_string(&input_str);
-    let frames: Vec<_> = responses
-        .iter()
-        .enumerate()
-        .filter_map(|(i, resp)| match resp {
-            Ok(CCDResponse::SingleReading(frame)) => Some(frame.clone()),
-            Ok(_) => None,
-            Err(err) => {
-                println!("Couldn't parse package #{}: {}", i + 1, err);
-                None
-            }
-        })
-        .collect();
-
-    match conf.format {
-        OutputFormat::CSV => {
-            let mut out = File::create(&conf.output).await?;
-            out.write_all(frames_to_csv(&frames).as_bytes()).await?;
-        }
-        OutputFormat::Hex => {
-            let mut out = File::create(&conf.output).await?;
-            out.write_all(frames_to_hex(&frames).as_bytes()).await?;
-        }
-    };
-
-    Ok(())
-}
-
-async fn get_version(conf: &SerialConf) -> Result<()> {
+fn get_version(conf: &SerialConf) -> Result<()> {
     let mut ccd = ccd_over_serial(&conf.serial)?;
-    ccd.send(CCDCommand::GetVersion).await?;
-    handle_ccd_response!(
-        ccd.next().await,
-        CCDResponse::VersionInfo,
-        |info: ccd_lcamv06::VersionDetails| {
-            println!("{}", info);
-            Ok(())
-        }
-    )?;
+    let version_details = ccd.get_version()?;
+    println!("{}", version_details);
     Ok(())
 }
 
-async fn get_baud_rate(conf: &SerialConf) -> Result<()> {
+fn get_baud_rate(conf: &SerialConf) -> Result<()> {
     let mut ccd = ccd_over_serial(&conf.serial)?;
-    ccd.send(CCDCommand::GetSerialBaudRate).await?;
-    handle_ccd_response!(
-        ccd.next().await,
-        CCDResponse::SerialBaudRate,
-        |baud_rate: BaudRate| {
-            let baud_rate = baud_rate.to_u32().unwrap();
-            println!("Current baud rate: {}", baud_rate);
-            Ok(())
-        }
-    )?;
+    let baud_rate = ccd.get_baudrate()?.to_u32().unwrap();
+    println!("Current baud rate: {}", baud_rate);
     Ok(())
 }
 
-async fn set_baud_rate(conf: &SetBaudRateConf) -> Result<()> {
+fn set_baud_rate(conf: &SetBaudRateConf) -> Result<()> {
     let mut ccd = ccd_over_serial(&conf.serial.serial)?;
-    ccd.send(CCDCommand::SetSerialBaudRate(conf.baud_rate))
-        .await?;
-    ccd.send(CCDCommand::GetSerialBaudRate).await?;
-    handle_ccd_response!(
-        ccd.next().await,
-        CCDResponse::SerialBaudRate,
-        |baud: BaudRate| {
-            if baud == conf.baud_rate {
-                Ok(())
-            } else {
-                Err(ccd_lcamv06::Error::InvalidBaudRate)
-            }
-        }
-    )?;
+    ccd.set_baudrate(conf.baud_rate)?;
     Ok(())
 }
 
-async fn get_avg_time(conf: &SerialConf) -> Result<()> {
+fn get_avg_time(conf: &SerialConf) -> Result<()> {
     let mut ccd = ccd_over_serial(&conf.serial)?;
-    ccd.send(CCDCommand::GetAverageTime).await?;
-    handle_ccd_response!(ccd.next().await, CCDResponse::AverageTime, |avg_t: u8| {
-        println!("Current \"average time\": {}", avg_t);
-        Ok(())
-    })?;
+    println!("Current \"average time\": {}", ccd.get_avg_time()?);
     Ok(())
 }
 
-async fn set_avg_time(conf: &SetAvgTimeConf) -> Result<()> {
+fn set_avg_time(conf: &SetAvgTimeConf) -> Result<()> {
     let mut ccd = ccd_over_serial(&conf.serial.serial)?;
-    ccd.send(CCDCommand::SetAverageTime(conf.average_time))
-        .await?;
+    ccd.set_avg_time(conf.average_time)?;
     Ok(())
 }
 
-async fn get_exp_time(conf: &SerialConf) -> Result<()> {
+fn get_exp_time(conf: &SerialConf) -> Result<()> {
     let mut ccd = ccd_over_serial(&conf.serial)?;
-    ccd.send(CCDCommand::GetExposureTime).await?;
-    handle_ccd_response!(ccd.next().await, CCDResponse::ExposureTime, |exp_t: u16| {
-        println!("Current \"exposure time\": {}", exp_t);
-        Ok(())
-    })?;
+    println!("Current \"exposure time\": {}", ccd.get_exp_time()?);
     Ok(())
 }
 
-async fn set_exp_time(conf: &SetExpTimeConf) -> Result<()> {
+fn set_exp_time(conf: &SetExpTimeConf) -> Result<()> {
     let mut ccd = ccd_over_serial(&conf.serial.serial)?;
-    ccd.send(CCDCommand::SetIntegrationTime(conf.exposure_time))
-        .await?;
+    ccd.set_exp_time(conf.exposure_time)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ccd_lcamv06::FRAME_PIXEL_COUNT;
 
     #[test]
     fn convert_frame_to_hex() {
-        let frame: ccd_lcamv06::Frame =
-            [u16::from_be_bytes([0xA1, 0xB2]); ccd_lcamv06::FRAME_PIXEL_COUNT];
+        let frame: Frame =
+            [u16::from_be_bytes([0xA1, 0xB2]); FRAME_PIXEL_COUNT];
         let hex = frame_to_hex(&frame);
         let hex_lines: Vec<_> = hex.split("\n").collect();
         assert_eq!(hex_lines[0], "A1B2 A1B2 A1B2 A1B2");
@@ -347,7 +243,7 @@ mod tests {
 
     #[test]
     fn convert_frame_to_csv() {
-        let frame: ccd_lcamv06::Frame = [1000; ccd_lcamv06::FRAME_PIXEL_COUNT];
+        let frame: Frame = [1000; FRAME_PIXEL_COUNT];
         let csv = frame_to_csv(&frame);
         let csv_fields: Vec<_> = csv.split(",").collect();
         assert_eq!(csv_fields[0], "1000");
