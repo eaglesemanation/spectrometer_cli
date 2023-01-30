@@ -2,20 +2,18 @@ mod cli;
 
 use clap::Parser;
 use num_traits::ToPrimitive;
-use simple_eyre::{eyre::eyre, Result};
-use std::{
-    io::Write,
-    fs::File
-};
-use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use serialport::SerialPort;
+use simple_eyre::{eyre::eyre, Result};
+use std::{fs::File, io::Write, time::Duration};
+use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
-use ccd_lcamv06::{CCD, BaudRate, Frame};
+use ccd_lcamv06::{BaudRate, Frame, CCD};
 use cli::*;
 
 fn main() -> Result<()> {
     simple_eyre::install()?;
     let cli = Cli::parse();
+    env_logger::init();
 
     match &cli.command {
         Commands::List => list_serial(),
@@ -44,6 +42,7 @@ fn ccd_over_serial(serial_path: &str) -> Result<CCD<Box<dyn SerialPort>>> {
         serial_path,
         ToPrimitive::to_u32(&BaudRate::default()).unwrap(),
     )
+    .timeout(Duration::from_millis(100))
     .open()
     .map_err(|_| eyre!("Could not open serial port"))?;
     Ok(CCD::new(port))
@@ -172,12 +171,8 @@ fn get_single_reading(conf: &SingleReadingConf) -> Result<()> {
 
     let mut out = File::create(&conf.output)?;
     let data = match conf.format {
-        OutputFormat::CSV => {
-            frame_to_csv(&frame)
-        }
-        OutputFormat::Hex => {
-            frame_to_hex(&frame)
-        }
+        OutputFormat::CSV => frame_to_csv(&frame),
+        OutputFormat::Hex => frame_to_hex(&frame),
     };
     out.write_all(&data.as_bytes())?;
     Ok(())
@@ -234,8 +229,7 @@ mod tests {
 
     #[test]
     fn convert_frame_to_hex() {
-        let frame: Frame =
-            [u16::from_be_bytes([0xA1, 0xB2]); FRAME_PIXEL_COUNT];
+        let frame: Frame = [u16::from_be_bytes([0xA1, 0xB2]); FRAME_PIXEL_COUNT];
         let hex = frame_to_hex(&frame);
         let hex_lines: Vec<_> = hex.split("\n").collect();
         assert_eq!(hex_lines[0], "A1B2 A1B2 A1B2 A1B2");

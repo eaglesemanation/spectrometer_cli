@@ -1,9 +1,11 @@
 [workspace]
-
 members = [
     "ccd_lcamv06",
     "spectrometer_cli",
 ]
+
+[workspace.dependencies]
+log = "0.4"
 
 [profile.release]
 lto = true # Link time optimization

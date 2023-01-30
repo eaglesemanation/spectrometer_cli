@@ -12,6 +12,7 @@ num-traits = "0.2"
 simple-eyre = "0.3"
 termcolor = "1.1"
 serialport = "4.2"
+env_logger = "0.10"
 
 [build-dependencies]
 embed-resource = "1.7"
