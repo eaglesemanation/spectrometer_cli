@@ -1,6 +1,10 @@
-use ccd_lcamv06::{BaudRate, error::Error};
+use ccd_lcamv06::{BaudRate, error::Error, CCD};
 use clap::{Args, Parser, Subcommand};
 use num_traits::FromPrimitive;
+use serialport::SerialPort;
+use std::time::Duration;
+use simple_eyre::{eyre::eyre, Result};
+use num_traits::ToPrimitive;
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -14,6 +18,19 @@ pub struct SerialConf {
     /// Name of serial port that should be used
     #[clap(short, long, value_parser)]
     pub serial: String,
+}
+
+impl SerialConf {
+    pub fn open_ccd(&self) -> Result<CCD<Box<dyn SerialPort>>> {
+        let port = serialport::new(
+            &self.serial,
+            ToPrimitive::to_u32(&BaudRate::default()).unwrap(),
+        )
+        .timeout(Duration::from_millis(100))
+        .open()
+        .map_err(|_| eyre!("Could not open serial port"))?;
+        Ok(CCD::new(port))
+    }
 }
 
 #[derive(Subcommand)]
@@ -42,8 +59,8 @@ pub struct ReadCommand {
 pub enum ReadCommands {
     /// Get a single frame
     Single(SingleReadingConf),
-    // Continuously get readings for specified duration
-    //Duration(DurationReadingConf),
+    /// Get multiple frames
+    Multi(MultiReadingConf)
 }
 
 #[derive(clap::ArgEnum, Clone)]
@@ -67,10 +84,10 @@ pub struct SingleReadingConf {
 }
 
 #[derive(Args)]
-pub struct DurationReadingConf {
-    /// Duration in seconds for which frames are continuously captured
-    #[clap(short, long, value_parser, default_value = "3")]
-    pub duration: u8,
+pub struct MultiReadingConf {
+    /// Amount of frames captured
+    #[clap(short, long, value_parser, default_value = "50")]
+    pub count: usize,
 
     #[clap(flatten)]
     pub reading: SingleReadingConf,
