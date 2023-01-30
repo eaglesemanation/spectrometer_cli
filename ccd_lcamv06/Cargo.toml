@@ -8,7 +8,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 default = ["std"]
-std = ["thiserror/std"]
+std = ["thiserror/std", "scopeguard/use_std"]
 
 [dependencies]
 arraystring = "0.3"
@@ -17,11 +17,12 @@ num = "0.4"
 num-derive = "0.3"
 num-traits = "0.2"
 thiserror = { version = "1.0", package = "thiserror-core", default-features = false }
+scopeguard = { version = "1.1", default-features = false }
 
 [dev-dependencies]
 claims = "0.7"
 criterion = "0.3"
-manifest-dir-macros = "0.1"
+utilities = { path = "utilities" }
 
 [[bench]]
 name = "response_parser"

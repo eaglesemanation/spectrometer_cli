@@ -8,7 +8,7 @@ use nom::{
     IResult, InputIter, InputLength, Slice,
 };
 
-use crate::config::BaudRate;
+use crate::flags::BaudRate;
 use super::version_parser::*;
 use super::{Response, FRAME_TOTAL_COUNT};
 
@@ -115,7 +115,7 @@ fn serial_baud_rate_parser(input: &[u8]) -> IResult<&[u8], Response> {
 }
 
 /// Takes a byte slice and drops bytes until first valid prefix of a response
-pub fn align_response(input: &[u8]) -> IResult<&[u8], ()> {
+pub(crate) fn align_response(input: &[u8]) -> IResult<&[u8], ()> {
     for i in 0..input.len() {
         match peek(alt((package_prefix, version_details_prefix)))(&input[i..]) {
             Ok(_) => return Ok((&input[i..], ())),
@@ -127,7 +127,7 @@ pub fn align_response(input: &[u8]) -> IResult<&[u8], ()> {
 
 /// Takes aligned input and parses it as either as a byte stream, or as plain text in case of
 /// version info response
-pub fn parse_response(input: &[u8]) -> IResult<&[u8], Response> {
+pub(crate) fn parse_response(input: &[u8]) -> IResult<&[u8], Response> {
     alt((
         package_parser,
         map(version_details_parser, |vd| Response::VersionInfo(vd)),

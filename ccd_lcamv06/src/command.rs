@@ -1,7 +1,8 @@
-use crate::config::{TriggerMode, BaudRate};
+use crate::flags::{TriggerMode, BaudRate};
 
+/// Package that can be sent to CCD
 #[derive(PartialEq, Eq, Debug)]
-pub enum Command {
+pub(crate) enum Command {
     SingleRead,
     ContinuousRead,
     PauseRead,

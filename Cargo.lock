@@ -112,6 +112,7 @@ dependencies = [
  "num",
  "num-derive",
  "num-traits",
+ "scopeguard",
  "thiserror-core",
 ]
 

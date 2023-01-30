@@ -2,9 +2,10 @@ pub mod parser;
 mod version_details;
 mod version_parser;
 
-use crate::config::BaudRate;
+use crate::flags::BaudRate;
 pub use version_details::VersionDetails;
 
+/// Package that can be received from CCD
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Response {
     SingleReading(Frame),

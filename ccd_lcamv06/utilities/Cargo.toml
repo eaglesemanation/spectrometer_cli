@@ -1,0 +1,14 @@
+[package]
+name = "utilities"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ccd_lcamv06 = { path = ".." }
+nom = "7.1"
+manifest-dir-macros = "0.1"
+mockall = "0.11"
+lazy_static = "1.4"
+
+[dev-dependencies]
+claims = "0.7"

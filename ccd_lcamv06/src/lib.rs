@@ -2,12 +2,14 @@
 #![feature(error_in_core)]
 
 pub mod error;
-pub mod config;
-pub mod command;
-pub mod response;
+pub(crate) mod flags;
+pub(crate) mod command;
+pub(crate) mod response;
 
+// TODO: Move std::io stuff into separate trait so it could be no_std
 #[cfg(feature = "std")]
-pub mod hex_parser;
+pub mod ccd;
 
-#[cfg(test)]
-mod tests;
+pub use flags::{BaudRate, TriggerMode};
+pub use ccd::CCD;
+pub use response::{Frame, FRAME_PIXEL_COUNT, VersionDetails};
