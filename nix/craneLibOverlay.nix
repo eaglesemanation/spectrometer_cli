@@ -16,14 +16,14 @@ let
 
   craneLib = (crane.mkLib prev).overrideToolchain rustToolchain;
 
-  assetsFilter = path: _type:
-    builtins.match ".*assets/.*" path != null;
+  resourcesFilter = path: _type:
+    builtins.match ".*resources/.*" path != null;
   testsFilter = path: _type:
     builtins.match ".*tests/.*" path != null;
   cleanCargoSource = src: prev.lib.cleanSourceWith {
     inherit src;
     filter = path: type:
-      (craneLib.filterCargoSources path type) || (assetsFilter path type) || (testsFilter path type);
+      (craneLib.filterCargoSources path type) || (resourcesFilter path type) || (testsFilter path type);
   };
 in
 {

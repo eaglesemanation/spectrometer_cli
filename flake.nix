@@ -43,32 +43,13 @@
         in
         rec {
           legacyPackages.pkgsCross = {
-            x86_64-linux = rec {
-              ccd_lcamv06 = pkgsX86_64LinuxStatic.callPackage ./nix/cargoPackage.nix { package = "ccd_lcamv06"; };
-              spectrometer_cli = pkgsX86_64LinuxStatic.callPackage ./nix/cargoPackage.nix {
-                cargoArtifacts = ccd_lcamv06;
-                package = "spectrometer_cli";
-              };
-            };
-            aarch64-linux = rec {
-              ccd_lcamv06 = pkgsAarch64LinuxStatic.callPackage ./nix/cargoPackage.nix { package = "ccd_lcamv06"; };
-              spectrometer_cli = pkgsAarch64LinuxStatic.callPackage ./nix/cargoPackage.nix {
-                cargoArtifacts = ccd_lcamv06;
-                package = "spectrometer_cli";
-              };
-            };
-            mingwW64 = rec {
-              ccd_lcamv06 = pkgsMingwW64.callPackage ./nix/cargoPackage.nix { package = "ccd_lcamv06"; };
-              spectrometer_cli = pkgsMingwW64.callPackage ./nix/cargoPackage.nix {
-                cargoArtifacts = ccd_lcamv06;
-                package = "spectrometer_cli";
-              };
-
-            };
+            x86_64-linux = pkgsX86_64LinuxStatic.callPackage ./nix/packages.nix {};
+            aarch64-linux = pkgsAarch64LinuxStatic.callPackage ./nix/packages.nix {};
+            mingwW64 = pkgsMingwW64.callPackage ./nix/packages.nix {};
           };
 
           packages = {
-            spectrometer_cli = legacyPackages.pkgsCross.${localSystem}.spectrometer_cli;
+            inherit (legacyPackages.pkgsCross.${localSystem}) spectrometer_cli;
             default = packages.spectrometer_cli;
           };
         }

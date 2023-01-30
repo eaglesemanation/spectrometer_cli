@@ -54,8 +54,8 @@ where
 
     // Tries to align data in read buffer to a recognized package head
     fn align_buffer(&mut self) {
-        if let Ok((tail, _)) = align_response(&mut self.buf[..=self.top]) {
-            let consumed = self.top - tail.len() + 1;
+        if let Ok((tail, _)) = align_response(&mut self.buf[..self.top]) {
+            let consumed = self.top - tail.len();
             self.buf.rotate_left(consumed);
             self.top -= consumed;
             self.aligned = true;
@@ -65,9 +65,9 @@ where
     fn receive_package(&mut self) -> Result<Response> {
         loop {
             self.fill_buffer()?;
-            match parse_response(&self.buf[..=self.top]) {
+            match parse_response(&self.buf[..self.top]) {
                 Ok((tail, resp)) => {
-                    let consumed = self.top - tail.len() + 1;
+                    let consumed = self.top - tail.len();
                     self.buf.rotate_left(consumed);
                     self.top -= consumed;
                     return Ok(resp);
