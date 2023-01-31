@@ -107,7 +107,7 @@ where
                 log::debug!("Recieved a AverageTime package with t = {}", t);
                 Ok(t)
             },
-            _ => Err(Error::UnexpectedResponse),
+            r => Err(Error::UnexpectedResponse(r.into())),
         }
     }
 
@@ -126,7 +126,7 @@ where
                 log::debug!("Recieved a ExposureTime package with t = {}", t);
                 Ok(t)
             },
-            _ => Err(Error::UnexpectedResponse),
+            r => Err(Error::UnexpectedResponse(r.into())),
         }
     }
 
@@ -151,7 +151,7 @@ where
                 log::debug!("Recieved a SerialBaudRate package");
                 Ok(b)
             },
-            _ => Err(Error::UnexpectedResponse),
+            r => Err(Error::UnexpectedResponse(r.into())),
         }
     }
 
@@ -165,7 +165,7 @@ where
                 log::debug!("Recieved a VersionInfo package");
                 Ok(d)
             },
-            _ => Err(Error::UnexpectedResponse),
+            r => Err(Error::UnexpectedResponse(r.into())),
         }
     }
 
@@ -179,7 +179,7 @@ where
                 log::debug!("Recieved a SingleReading package");
                 Ok(f)
             },
-            _ => Err(Error::UnexpectedResponse),
+            r => Err(Error::UnexpectedResponse(r.into())),
         }
     }
 
@@ -200,7 +200,7 @@ where
                     log::debug!("Recieved a SingleReading package");
                     f
                 },
-                _ => return Err(Error::UnexpectedResponse),
+                r => return Err(Error::UnexpectedResponse(r.into())),
             }
         }
         Ok(())

@@ -6,6 +6,10 @@ members = [
 
 [workspace.dependencies]
 log = "0.4"
+env_logger = "0.10"
+serialport = "4.2"
+plotters = "0.3"
+chrono = "0.4"
 
 [profile.release]
 lto = true # Link time optimization

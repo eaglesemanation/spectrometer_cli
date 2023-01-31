@@ -5,14 +5,17 @@ edition = "2021"
 build = "build.rs"
 
 [dependencies]
-ccd_lcamv06 = { path = "../ccd_lcamv06" }
+ccd_lcamv06 = { path = "../ccd_lcamv06", features = ["std"] }
 atty = "0.2"
 clap = { version = "3.2", features = ["derive"] }
 num-traits = "0.2"
 simple-eyre = "0.3"
 termcolor = "1.1"
-serialport = "4.2"
-env_logger = "0.10"
+serialport.workspace = true
+env_logger.workspace = true
+log.workspace = true
+plotters.workspace = true
+chrono.workspace = true
 
 [build-dependencies]
 embed-resource = "1.7"

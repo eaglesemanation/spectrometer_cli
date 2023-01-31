@@ -3,13 +3,14 @@ mod version_details;
 mod version_parser;
 
 use crate::flags::BaudRate;
+use strum_macros::IntoStaticStr;
 pub use version_details::VersionDetails;
 
 // While there is a large difference in response sizes, all of the small ones usually come one at a
 // time, while SingleReading may come as a stream. Plus Box<_> cannot be used because of no_std
 #[allow(clippy::large_enum_variant)]
 /// Package that can be received from CCD
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone, IntoStaticStr)]
 pub enum Response {
     SingleReading(Frame),
     ExposureTime(u16),

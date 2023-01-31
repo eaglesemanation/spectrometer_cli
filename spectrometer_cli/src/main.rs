@@ -1,13 +1,15 @@
 mod cli;
+mod output;
+mod serial;
 
 use clap::Parser;
 use simple_eyre::Result;
 use num_traits::ToPrimitive;
-use std::{fs::File, io::Write};
+use std::io::Write;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
-use ccd_lcamv06::Frame;
 use cli::*;
+use serial::SerialConf;
 
 fn main() -> Result<()> {
     simple_eyre::install()?;
@@ -61,68 +63,13 @@ fn list_serial() -> Result<()> {
     Ok(())
 }
 
-fn frame_to_hex(frame: &Frame) -> String {
-    frame
-        // Split frame into 4 word lines
-        .chunks(4)
-        .map(|chunk| {
-            chunk
-                .iter()
-                .map(|pixel| {
-                    // Format each pixel as 4 letter hex word
-                    let [b1, b2] = u16::to_be_bytes(*pixel);
-                    format!("{b1:02X}{b2:02X}")
-                })
-                .collect::<Vec<_>>()
-                // Separate each work with a space
-                .join(" ")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn frames_to_hex(frames: &[Frame]) -> String {
-    frames
-        .iter()
-        .map(frame_to_hex)
-        .collect::<Vec<_>>()
-        // Separate each frame by 2 empty lines
-        .join("\n\n\n")
-}
-
-fn frame_to_csv(frame: &Frame) -> String {
-    frame
-        .iter()
-        .map(|pixel| pixel.to_string())
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-fn frames_to_csv(frames: &[Frame]) -> String {
-    frames
-        .iter()
-        .map(frame_to_csv)
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 fn get_multiple_readings(conf: &MultiReadingConf) -> Result<()> {
-    let mut ccd = conf.reading.serial.open_ccd()?;
+    let mut ccd = conf.serial.open_ccd()?;
     let mut frames: Vec<_> = Vec::new();
     frames.reserve(conf.count);
 
     ccd.get_frames(&mut frames)?;
-
-    let mut out = File::create(&conf.reading.output)?;
-    let data = match conf.reading.format {
-        OutputFormat::Csv => {
-            frames_to_csv(&frames)
-        }
-        OutputFormat::Hex => {
-            frames_to_hex(&frames)
-        }
-    };
-    out.write_all(data.as_bytes())?;
+    conf.output.write_frames(&frames)?;
 
     Ok(())
 }
@@ -130,13 +77,7 @@ fn get_multiple_readings(conf: &MultiReadingConf) -> Result<()> {
 fn get_single_reading(conf: &SingleReadingConf) -> Result<()> {
     let mut ccd = conf.serial.open_ccd()?;
     let frame = ccd.get_frame()?;
-
-    let mut out = File::create(&conf.output)?;
-    let data = match conf.format {
-        OutputFormat::Csv => frame_to_csv(&frame),
-        OutputFormat::Hex => frame_to_hex(&frame),
-    };
-    out.write_all(data.as_bytes())?;
+    conf.output.write_frame(&frame)?;
     Ok(())
 }
 
@@ -182,26 +123,4 @@ fn set_exp_time(conf: &SetExpTimeConf) -> Result<()> {
     let mut ccd = conf.serial.open_ccd()?;
     ccd.set_exp_time(conf.exposure_time)?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ccd_lcamv06::FRAME_PIXEL_COUNT;
-
-    #[test]
-    fn convert_frame_to_hex() {
-        let frame: Frame = [u16::from_be_bytes([0xA1, 0xB2]); FRAME_PIXEL_COUNT];
-        let hex = frame_to_hex(&frame);
-        let hex_lines: Vec<_> = hex.split("\n").collect();
-        assert_eq!(hex_lines[0], "A1B2 A1B2 A1B2 A1B2");
-    }
-
-    #[test]
-    fn convert_frame_to_csv() {
-        let frame: Frame = [1000; FRAME_PIXEL_COUNT];
-        let csv = frame_to_csv(&frame);
-        let csv_fields: Vec<_> = csv.split(",").collect();
-        assert_eq!(csv_fields[0], "1000");
-    }
 }

@@ -14,8 +14,8 @@ pub enum Error {
     UnexpectedEop,
     #[error("{0} is longer than expected")]
     VersionDetailTooLong(&'static str),
-    #[error("Recieved an unexpected type of response")]
-    UnexpectedResponse,
+    #[error("Recieved an unexpected type of response: {0}")]
+    UnexpectedResponse(&'static str),
 
     #[cfg(feature = "std")]
     #[error("{0}")]

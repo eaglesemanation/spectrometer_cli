@@ -1,36 +1,13 @@
-use ccd_lcamv06::{BaudRate, error::Error, CCD};
+use ccd_lcamv06::{BaudRate, error::Error};
 use clap::{Args, Parser, Subcommand};
 use num_traits::FromPrimitive;
-use serialport::SerialPort;
-use std::time::Duration;
-use simple_eyre::{eyre::eyre, Result};
-use num_traits::ToPrimitive;
+use crate::{output::Output, serial::SerialConf};
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
 pub struct Cli {
     #[clap(subcommand)]
     pub command: Commands,
-}
-
-#[derive(Args)]
-pub struct SerialConf {
-    /// Name of serial port that should be used
-    #[clap(short, long, value_parser)]
-    pub serial: String,
-}
-
-impl SerialConf {
-    pub fn open_ccd(&self) -> Result<CCD<Box<dyn SerialPort>>> {
-        let port = serialport::new(
-            &self.serial,
-            ToPrimitive::to_u32(&BaudRate::default()).unwrap(),
-        )
-        .timeout(Duration::from_millis(100))
-        .open()
-        .map_err(|_| eyre!("Could not open serial port"))?;
-        Ok(CCD::new(port))
-    }
 }
 
 #[derive(Subcommand)]
@@ -63,21 +40,10 @@ pub enum ReadCommands {
     Multi(MultiReadingConf)
 }
 
-#[derive(clap::ArgEnum, Clone)]
-pub enum OutputFormat {
-    Csv,
-    Hex,
-}
-
 #[derive(Args)]
 pub struct SingleReadingConf {
-    /// Path to a file where readings should be stored
-    #[clap(short, long, value_parser, value_hint = clap::ValueHint::FilePath)]
-    pub output: String,
-
-    /// File format for reading output
-    #[clap(long, value_enum, default_value = "csv")]
-    pub format: OutputFormat,
+    #[clap(flatten)]
+    pub output: Output,
 
     #[clap(flatten)]
     pub serial: SerialConf,
@@ -86,11 +52,14 @@ pub struct SingleReadingConf {
 #[derive(Args)]
 pub struct MultiReadingConf {
     /// Amount of frames captured
-    #[clap(short, long, value_parser, default_value = "50")]
+    #[clap(value_parser, default_value = "50")]
     pub count: usize,
 
     #[clap(flatten)]
-    pub reading: SingleReadingConf,
+    pub output: Output,
+
+    #[clap(flatten)]
+    pub serial: SerialConf,
 }
 
 #[derive(Args)]
