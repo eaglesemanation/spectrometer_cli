@@ -2,6 +2,7 @@ mod cli;
 mod output;
 mod serial;
 
+use ccd_lcamv06::FRAME_PIXEL_COUNT;
 use clap::Parser;
 use simple_eyre::Result;
 use num_traits::ToPrimitive;
@@ -65,8 +66,8 @@ fn list_serial() -> Result<()> {
 
 fn get_multiple_readings(conf: &MultiReadingConf) -> Result<()> {
     let mut ccd = conf.serial.open_ccd()?;
-    let mut frames: Vec<_> = Vec::new();
-    frames.reserve(conf.count);
+    let mut frames: Vec<_> = Vec::with_capacity(conf.count);
+    frames.resize(conf.count, [0; FRAME_PIXEL_COUNT]);
 
     ccd.get_frames(&mut frames)?;
     conf.output.write_frames(&frames)?;

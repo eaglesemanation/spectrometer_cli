@@ -1,11 +1,12 @@
 use ccd_lcamv06::Frame;
+use chrono::{DateTime, TimeZone};
 use clap::{ArgEnum, Args};
 use plotters::prelude::*;
 use simple_eyre::{eyre::eyre, Result};
 use std::{
     fs::File,
     io::Write,
-    path::{Path, PathBuf},
+    path::{Path, PathBuf}, fmt::Display,
 };
 
 #[derive(Args)]
@@ -53,49 +54,70 @@ fn frames_to_csv(frames: &[Frame]) -> String {
         .join("\n")
 }
 
+struct ChartData<'a, TZ: TimeZone> {
+    frame: &'a Frame,
+    idx: usize,
+    timestamp: DateTime<TZ>,
+}
+
+fn draw_frame<'a, DB: DrawingBackend, TZ: TimeZone>(
+    root: &DrawingArea<DB, plotters::coord::Shift>,
+    data: ChartData<'a, TZ>,
+) -> Result<()>
+where
+    DB::ErrorType: 'static,
+    TZ::Offset: Display
+{
+    root.fill(&WHITE)?;
+
+    log::trace!("Drawing chart axes");
+    let mut chart = ChartBuilder::on(root)
+        .caption(
+            format!(
+                "Frame #{} taken at {}",
+                data.idx,
+                data.timestamp.format("%Y-%m-%d %H:%M:%S")
+            ),
+            ("sans-serif", (5).percent()),
+        )
+        .set_label_area_size(LabelAreaPosition::Left, (8).percent())
+        .set_label_area_size(LabelAreaPosition::Bottom, (5).percent())
+        .build_cartesian_2d(0..data.frame.len(), 0u32..100_000u32)?;
+
+    log::trace!("Writing chart axes labels");
+    chart
+        .configure_mesh()
+        .x_desc("Pixel #")
+        .y_desc("Inverse intensity")
+        .draw()?;
+
+    log::trace!("Drawing frame as a line chart");
+    chart.draw_series(LineSeries::new(
+        data.frame.iter().enumerate().map(|(x, y)| (x, *y as u32)),
+        BLACK,
+    ))?;
+
+    log::trace!("Pushing frame chart to rendering backend");
+    root.present()?;
+
+    Ok(())
+}
+
 impl Output {
-    fn frame_to_chart(&self, frame: &Frame) -> Result<()> {
-        log::trace!("Creating bitmap backend");
-        let root = BitMapBackend::new(self.output.as_path(), (1280, 720)).into_drawing_area();
-        root.fill(&WHITE)?;
-
-        log::trace!("Drawing chart axes");
-        let mut chart = ChartBuilder::on(&root)
-            .caption(
-                format!(
-                    "Reading from {}",
-                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-                ),
-                ("sans-serif", (5).percent()),
-            )
-            .set_label_area_size(LabelAreaPosition::Left, (8).percent())
-            .set_label_area_size(LabelAreaPosition::Bottom, (5).percent())
-            .build_cartesian_2d(0..frame.len(), 0u32..100_000u32)?;
-
-        log::trace!("Writing chart axes labels");
-        chart
-            .configure_mesh()
-            .x_desc("Pixel #")
-            .y_desc("Inverse intensity")
-            .draw()?;
-
-        log::trace!("Drawing frame as a line chart");
-        chart.draw_series(LineSeries::new(
-            frame.iter().enumerate().map(|(x, y)| (x, *y as u32)),
-            BLACK,
-        ))?;
-
-        log::trace!("Writing chart into a file");
-        root.present()?;
-
-        Ok(())
-    }
-
     pub fn write_frame(&self, frame: &Frame) -> Result<()> {
         log::debug!("Saving frame to {:?}", self.output);
         match self.format {
             OutputFormat::Chart => {
-                self.frame_to_chart(frame)?;
+                let root =
+                    BitMapBackend::new(self.output.as_path(), (1280, 720)).into_drawing_area();
+                draw_frame(
+                    &root,
+                    ChartData {
+                        frame,
+                        idx: 1,
+                        timestamp: chrono::Local::now(),
+                    },
+                )?;
             }
             OutputFormat::Csv => {
                 let mut out = File::create(self.output.as_path())?;
@@ -106,51 +128,23 @@ impl Output {
         Ok(())
     }
 
-    fn frames_to_chart(&self, frames: &[Frame]) -> Result<()> {
-        let root = BitMapBackend::gif(self.output.as_path(), (1280, 720), 100)?.into_drawing_area();
-
-        for (frame_idx, frame) in frames.iter().enumerate() {
-            root.fill(&WHITE)?;
-
-            let mut chart = ChartBuilder::on(&root)
-                .caption(
-                    format!(
-                        "Reading #{} from {}",
-                        frame_idx + 1,
-                        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-                    ),
-                    ("sans-serif", 20),
-                )
-                .set_label_area_size(LabelAreaPosition::Left, (8).percent())
-                .set_label_area_size(LabelAreaPosition::Bottom, (4).percent())
-                .build_cartesian_2d(0..frame.len(), 0u32..10_000u32)?;
-
-            chart
-                .configure_mesh()
-                .x_desc("Pixel #")
-                .y_desc("Inverse intensity")
-                .draw()?;
-
-            chart.draw_series(LineSeries::new(
-                frame.iter().enumerate().map(|(idx, val)| {
-                    (
-                        idx.try_into().expect("pixel id is larger than u32"),
-                        (*val).into(),
-                    )
-                }),
-                BLACK.stroke_width(3),
-            ))?;
-
-            root.present()?;
-        }
-        Ok(())
-    }
-
     pub fn write_frames(&self, frames: &[Frame]) -> Result<()> {
         log::debug!("Saving frames to {:?}", self.output);
         match self.format {
             OutputFormat::Chart => {
-                self.frames_to_chart(frames)?;
+                let root = BitMapBackend::gif(self.output.as_path(), (1280, 720), 500)?
+                    .into_drawing_area();
+                let timestamp = chrono::Local::now();
+                for (frame_idx, frame) in frames.iter().enumerate() {
+                    draw_frame(
+                        &root,
+                        ChartData {
+                            frame,
+                            idx: frame_idx + 1,
+                            timestamp,
+                        },
+                    )?;
+                }
             }
             OutputFormat::Csv => {
                 let mut out = File::create(self.output.as_path())?;

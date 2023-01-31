@@ -185,6 +185,8 @@ where
 
     /// Takes frames from CCD until buffer is filled or got an error while receiving package
     pub fn get_frames(&mut self, buf: &mut [Frame]) -> Result<()> {
+        // FIXME: Instead of writing into slice accept some trait that could be pushed into
+        // (could be std only feature)
         log::debug!("Sending a ContinuousRead package");
         self.send_package(Command::ContinuousRead)?;
         let mut s = guard(self, |s| {
@@ -193,6 +195,7 @@ where
             s.send_package(Command::PauseRead)
                 .expect("Failed to stop continious CCD reading, unrecoverable state");
         });
+        log::debug!("Capturing {} frames", buf.len());
         for frame in buf {
             log::debug!("Waiting for a response");
             *frame = match s.receive_package()? {
