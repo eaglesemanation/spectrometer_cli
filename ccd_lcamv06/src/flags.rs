@@ -12,8 +12,9 @@ pub enum TriggerMode {
     SingleHardTrigger = 0x02,
 }
 
-#[derive(ToPrimitive, FromPrimitive, Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(ToPrimitive, FromPrimitive, Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub enum BaudRate {
+    #[default]
     Baud115200 = 115200,
     Baud384000 = 384000,
     Baud921600 = 921600,
@@ -30,19 +31,13 @@ impl BaudRate {
         }
     }
 
-    pub(crate) fn to_code(&self) -> u8 {
+    pub(crate) fn to_code(self) -> u8 {
         use BaudRate::*;
-        match *self {
+        match self {
             Baud115200 => 0x01,
             Baud384000 => 0x02,
             Baud921600 => 0x03,
         }
-    }
-}
-
-impl Default for BaudRate {
-    fn default() -> Self {
-        BaudRate::Baud115200
     }
 }
 

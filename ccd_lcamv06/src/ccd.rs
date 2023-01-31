@@ -54,7 +54,7 @@ where
 
     // Tries to align data in read buffer to a recognized package head
     fn align_buffer(&mut self) {
-        if let Ok((tail, _)) = align_response(&mut self.buf[..self.top]) {
+        if let Ok((tail, _)) = align_response(&self.buf[..self.top]) {
             let consumed = self.top - tail.len();
             self.buf.rotate_left(consumed);
             self.top -= consumed;
@@ -193,9 +193,9 @@ where
             s.send_package(Command::PauseRead)
                 .expect("Failed to stop continious CCD reading, unrecoverable state");
         });
-        for i in 0..buf.len() {
+        for frame in buf {
             log::debug!("Waiting for a response");
-            buf[i] = match s.receive_package()? {
+            *frame = match s.receive_package()? {
                 Response::SingleReading(f) => {
                     log::debug!("Recieved a SingleReading package");
                     f

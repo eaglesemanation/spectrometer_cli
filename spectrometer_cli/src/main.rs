@@ -71,7 +71,7 @@ fn frame_to_hex(frame: &Frame) -> String {
                 .map(|pixel| {
                     // Format each pixel as 4 letter hex word
                     let [b1, b2] = u16::to_be_bytes(*pixel);
-                    return format!("{:02X}{:02X}", b1, b2);
+                    format!("{b1:02X}{b2:02X}")
                 })
                 .collect::<Vec<_>>()
                 // Separate each work with a space
@@ -115,14 +115,14 @@ fn get_multiple_readings(conf: &MultiReadingConf) -> Result<()> {
 
     let mut out = File::create(&conf.reading.output)?;
     let data = match conf.reading.format {
-        OutputFormat::CSV => {
+        OutputFormat::Csv => {
             frames_to_csv(&frames)
         }
         OutputFormat::Hex => {
             frames_to_hex(&frames)
         }
     };
-    out.write_all(&data.as_bytes())?;
+    out.write_all(data.as_bytes())?;
 
     Ok(())
 }
@@ -133,24 +133,24 @@ fn get_single_reading(conf: &SingleReadingConf) -> Result<()> {
 
     let mut out = File::create(&conf.output)?;
     let data = match conf.format {
-        OutputFormat::CSV => frame_to_csv(&frame),
+        OutputFormat::Csv => frame_to_csv(&frame),
         OutputFormat::Hex => frame_to_hex(&frame),
     };
-    out.write_all(&data.as_bytes())?;
+    out.write_all(data.as_bytes())?;
     Ok(())
 }
 
 fn get_version(conf: &SerialConf) -> Result<()> {
     let mut ccd = conf.open_ccd()?;
     let version_details = ccd.get_version()?;
-    println!("{}", version_details);
+    println!("{version_details}");
     Ok(())
 }
 
 fn get_baud_rate(conf: &SerialConf) -> Result<()> {
     let mut ccd = conf.open_ccd()?;
     let baud_rate = ccd.get_baudrate()?.to_u32().unwrap();
-    println!("Current baud rate: {}", baud_rate);
+    println!("Current baud rate: {baud_rate}");
     Ok(())
 }
 

@@ -114,12 +114,15 @@ fn serial_baud_rate_parser(input: &[u8]) -> IResult<&[u8], Response> {
     }
 }
 
+fn prefix_parser(input: &[u8]) -> IResult<&[u8], ()> {
+    alt((package_prefix, version_details_prefix))(input)
+}
+
 /// Takes a byte slice and drops bytes until first valid prefix of a response
 pub(crate) fn align_response(input: &[u8]) -> IResult<&[u8], ()> {
     for i in 0..input.len() {
-        match peek(alt((package_prefix, version_details_prefix)))(&input[i..]) {
-            Ok(_) => return Ok((&input[i..], ())),
-            _ => {}
+        if peek(prefix_parser)(&input[i..]).is_ok() {
+            return Ok((&input[i..], ()))
         }
     }
     Err(nom::Err::Incomplete(nom::Needed::Unknown))
@@ -130,7 +133,7 @@ pub(crate) fn align_response(input: &[u8]) -> IResult<&[u8], ()> {
 pub(crate) fn parse_response(input: &[u8]) -> IResult<&[u8], Response> {
     alt((
         package_parser,
-        map(version_details_parser, |vd| Response::VersionInfo(vd)),
+        map(version_details_parser, Response::VersionInfo),
     ))(input)
 }
 

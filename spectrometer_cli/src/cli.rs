@@ -65,7 +65,7 @@ pub enum ReadCommands {
 
 #[derive(clap::ArgEnum, Clone)]
 pub enum OutputFormat {
-    CSV,
+    Csv,
     Hex,
 }
 

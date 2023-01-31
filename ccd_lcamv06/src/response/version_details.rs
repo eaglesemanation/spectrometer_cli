@@ -34,7 +34,7 @@ impl VersionDetails {
     }
 }
 
-impl<'a> Display for VersionDetails {
+impl Display for VersionDetails {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_fmt(format_args!(
             concat!(

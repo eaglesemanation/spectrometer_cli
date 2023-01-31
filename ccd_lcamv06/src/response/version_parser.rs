@@ -13,7 +13,7 @@ fn is_separator(c: u8) -> bool {
     c == b' ' || c == b','
 }
 
-fn word_with_separator<'a>(input: &[u8]) -> IResult<&[u8], &str> {
+fn word_with_separator(input: &[u8]) -> IResult<&[u8], &str> {
     let (input, b) = terminated(take_till1(is_separator), take_while1(is_separator))(input)?;
     // TODO: Handle error
     Ok((input, from_utf8(b).unwrap()))
