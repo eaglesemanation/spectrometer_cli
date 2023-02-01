@@ -1,12 +1,12 @@
 use ccd_lcamv06::Frame;
-use chrono::{DateTime, TimeZone};
+use time::{OffsetDateTime, macros::format_description, format_description::FormatItem};
 use clap::{ArgEnum, Args};
 use plotters::prelude::*;
 use simple_eyre::{eyre::eyre, Result};
 use std::{
     fs::File,
     io::Write,
-    path::{Path, PathBuf}, fmt::Display,
+    path::{Path, PathBuf},
 };
 
 #[derive(Args)]
@@ -54,19 +54,20 @@ fn frames_to_csv(frames: &[Frame]) -> String {
         .join("\n")
 }
 
-struct ChartData<'a, TZ: TimeZone> {
+struct ChartData<'a> {
     frame: &'a Frame,
     idx: usize,
-    timestamp: DateTime<TZ>,
+    timestamp: OffsetDateTime,
 }
 
-fn draw_frame<'a, DB: DrawingBackend, TZ: TimeZone>(
+const TIMESTAMP_FORMAT: &[FormatItem<'static>] = format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
+
+fn draw_frame<'a, DB: DrawingBackend>(
     root: &DrawingArea<DB, plotters::coord::Shift>,
-    data: ChartData<'a, TZ>,
+    data: ChartData<'a>,
 ) -> Result<()>
 where
     DB::ErrorType: 'static,
-    TZ::Offset: Display
 {
     root.fill(&WHITE)?;
 
@@ -76,7 +77,7 @@ where
             format!(
                 "Frame #{} taken at {}",
                 data.idx,
-                data.timestamp.format("%Y-%m-%d %H:%M:%S")
+                data.timestamp.format(TIMESTAMP_FORMAT)?
             ),
             ("sans-serif", (5).percent()),
         )
@@ -115,7 +116,7 @@ impl Output {
                     ChartData {
                         frame,
                         idx: 1,
-                        timestamp: chrono::Local::now(),
+                        timestamp: OffsetDateTime::now_local()?,
                     },
                 )?;
             }
@@ -134,7 +135,7 @@ impl Output {
             OutputFormat::Chart => {
                 let root = BitMapBackend::gif(self.output.as_path(), (1280, 720), 500)?
                     .into_drawing_area();
-                let timestamp = chrono::Local::now();
+                let timestamp = OffsetDateTime::now_local()?;
                 for (frame_idx, frame) in frames.iter().enumerate() {
                     draw_frame(
                         &root,
