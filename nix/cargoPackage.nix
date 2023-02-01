@@ -21,7 +21,7 @@ in
 craneLib.buildPackage ({
   pname = package;
   src = craneLib.cleanCargoSource ./..;
-  cargoExtraFlags = "-p ${package}";
+  cargoExtraArgs = "-p ${package}";
 
   inherit nativeBuildInputs;
 
