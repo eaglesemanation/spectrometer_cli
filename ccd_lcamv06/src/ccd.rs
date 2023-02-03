@@ -7,7 +7,7 @@ use crate::{
         Frame, Response, VersionDetails,
     },
 };
-use core::mem::size_of;
+use core::{mem::size_of, iter, iter::Extend};
 use scopeguard::guard;
 use std::io::{Read, Write};
 
@@ -183,10 +183,8 @@ where
         }
     }
 
-    /// Takes frames from CCD until buffer is filled or got an error while receiving package
-    pub fn get_frames(&mut self, buf: &mut [Frame]) -> Result<()> {
-        // FIXME: Instead of writing into slice accept some trait that could be pushed into
-        // (could be std only feature)
+    /// Takes `count` frames from CCD and pushes them into buffer, or exits early on an error
+    pub fn get_frames<T: Extend<Frame>>(&mut self, buf: &mut T, count: usize) -> Result<()> {
         log::debug!("Sending a ContinuousRead package");
         self.send_package(Command::ContinuousRead)?;
         let mut s = guard(self, |s| {
@@ -195,16 +193,17 @@ where
             s.send_package(Command::PauseRead)
                 .expect("Failed to stop continious CCD reading, unrecoverable state");
         });
-        log::debug!("Capturing {} frames", buf.len());
-        for frame in buf {
+        log::debug!("Capturing {} frames", count);
+        for _ in 0..count {
             log::debug!("Waiting for a response");
-            *frame = match s.receive_package()? {
+            let frame = match s.receive_package()? {
                 Response::SingleReading(f) => {
                     log::debug!("Recieved a SingleReading package");
                     f
                 },
                 r => return Err(Error::UnexpectedResponse(r.into())),
-            }
+            };
+            buf.extend(iter::once(frame))
         }
         Ok(())
     }
