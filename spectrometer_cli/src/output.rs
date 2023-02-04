@@ -62,9 +62,9 @@ struct ChartData<'a> {
 
 const TIMESTAMP_FORMAT: &[FormatItem<'static>] = format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
 
-fn draw_frame<'a, DB: DrawingBackend>(
+fn draw_frame<DB: DrawingBackend>(
     root: &DrawingArea<DB, plotters::coord::Shift>,
-    data: ChartData<'a>,
+    data: ChartData<'_>,
 ) -> Result<()>
 where
     DB::ErrorType: 'static,

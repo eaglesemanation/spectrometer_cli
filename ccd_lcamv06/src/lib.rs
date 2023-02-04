@@ -5,10 +5,14 @@ pub(crate) mod flags;
 pub(crate) mod command;
 pub(crate) mod response;
 
-// TODO: Move std::io stuff into separate trait so it could be no_std
+pub mod io_adapter;
+pub use io_adapter::IoAdapter;
 #[cfg(feature = "std")]
+pub use io_adapter::std_io::StdIoAdapter;
+#[cfg(feature = "embedded_hal")]
+pub use io_adapter::embedded_hal::EmbeddedHalAdapter;
+
 pub mod ccd;
-#[cfg(feature = "std")]
 pub use ccd::CCD;
 
 pub use flags::{BaudRate, TriggerMode};

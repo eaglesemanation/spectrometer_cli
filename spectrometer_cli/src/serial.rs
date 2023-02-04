@@ -1,4 +1,4 @@
-use ccd_lcamv06::{BaudRate, CCD};
+use ccd_lcamv06::{BaudRate, CCD, StdIoAdapter, IoAdapter};
 use clap::Args;
 use num_traits::ToPrimitive;
 use serialport::SerialPort;
@@ -12,8 +12,10 @@ pub struct SerialConf {
     pub serial: String,
 }
 
+pub type SerialCCD = CCD<StdIoAdapter<Box<dyn SerialPort>>>;
+
 impl SerialConf {
-    pub fn open_ccd(&self) -> Result<CCD<Box<dyn SerialPort>>> {
+    pub fn open_ccd(&self) -> Result<SerialCCD> {
         let port = serialport::new(
             &self.serial,
             BaudRate::default().to_u32().unwrap(),
@@ -21,6 +23,6 @@ impl SerialConf {
         .timeout(Duration::from_millis(100))
         .open()
         .map_err(|_| eyre!("Could not open serial port"))?;
-        Ok(CCD::new(port))
+        Ok(StdIoAdapter::new(port).open_ccd())
     }
 }

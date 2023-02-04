@@ -6,17 +6,17 @@ use crate::{
         parser::{align_response, parse_response},
         Frame, Response, VersionDetails,
     },
+    IoAdapter,
 };
 use core::{mem::size_of, iter, iter::Extend};
 use scopeguard::guard;
-use std::io::{Read, Write};
 
 // Sized as 2 responses in case of really unfortunate initial misalignment
 const READ_BUF_SIZE: usize = size_of::<Response>() * 2;
 
 pub struct CCD<IO>
 where
-    IO: Read + Write,
+    IO: IoAdapter,
 {
     io: IO,
     // Read buffer
@@ -29,20 +29,15 @@ where
 
 impl<IO> CCD<IO>
 where
-    IO: Read + Write,
+    IO: IoAdapter,
 {
-    pub fn new(io: IO) -> Self {
+    pub(crate) fn new(io: IO) -> Self {
         CCD {
             io,
             buf: [0; READ_BUF_SIZE],
             top: 0,
             aligned: false,
         }
-    }
-
-    fn send_package(&mut self, cmd: Command) -> Result<()> {
-        self.io.write_all(&cmd.encode())?;
-        Ok(())
     }
 
     fn fill_buffer(&mut self) -> Result<()> {
@@ -60,6 +55,11 @@ where
             self.top -= consumed;
             self.aligned = true;
         }
+    }
+
+    fn send_package(&mut self, cmd: Command) -> Result<()> {
+        self.io.write_all(&cmd.encode())?;
+        Ok(())
     }
 
     fn receive_package(&mut self) -> Result<Response> {
@@ -184,7 +184,7 @@ where
     }
 
     /// Takes `count` frames from CCD and pushes them into buffer, or exits early on an error
-    pub fn get_frames<T: Extend<Frame>>(&mut self, buf: &mut T, count: usize) -> Result<()> {
+    pub fn get_frames<B: Extend<Frame>>(&mut self, buf: &mut B, count: usize) -> Result<()> {
         log::debug!("Sending a ContinuousRead package");
         self.send_package(Command::ContinuousRead)?;
         let mut s = guard(self, |s| {

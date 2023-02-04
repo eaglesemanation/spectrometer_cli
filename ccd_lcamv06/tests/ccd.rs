@@ -1,7 +1,7 @@
 use utilities::{
     SINGLE_PACKAGE, MockIO
 };
-use ccd_lcamv06::CCD;
+use ccd_lcamv06::{IoAdapter, StdIoAdapter};
 use std::io::Write;
 
 #[test]
@@ -11,7 +11,7 @@ fn decode_single_package() {
     mock_io.expect_read().returning(move |mut buf| {
         buf.write(&SINGLE_PACKAGE)
     });
-    let mut ccd = CCD::new(mock_io);
+    let mut ccd = StdIoAdapter::new(mock_io).open_ccd();
 
     // In ideal scenario input data should be a flat line and all values equal,
     // but this is a real world data and there is some noise.

@@ -19,5 +19,10 @@ pub enum Error {
 
     #[cfg(feature = "std")]
     #[error("{0}")]
-    IOError(#[from] std::io::Error),
+    StdIoError(#[from] std::io::Error),
+
+    // TODO: Include contents of original error
+    #[cfg(feature = "embedded-hal-nb")]
+    #[error("Serial communication failed")]
+    EmbeddedHalNbError,
 }
