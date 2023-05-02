@@ -1,0 +1,5 @@
+[submodule "buildroot/buildroot"]
+	path = sbc_config/buildroot
+	url = git://git.buildroot.net/buildroot
+[submodule "buildroot"]
+	branch = 2022.11.3

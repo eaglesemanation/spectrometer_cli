@@ -2,7 +2,9 @@
 members = [
     "ccd_lcamv06",
     "spectrometer_cli",
+    "spectrometer_sbc"
 ]
+exclude = ["sbc_config"]
 
 [workspace.dependencies]
 log = "0.4"

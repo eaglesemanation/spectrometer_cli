@@ -1,0 +1,1 @@
+source "$BR2_EXTERNAL_SPECTR_PATH/package/spectrometer_sbc/Config.in"

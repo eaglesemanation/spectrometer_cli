@@ -1,0 +1,8 @@
+config BR2_PACKAGE_SPECTROMETER_SBC
+	bool "spectrometer_sbc"
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+	select BR2_PACKAGE_HOST_RUSTC
+	help
+	  CCD LCAM V06 board client used as a spectrometer
+
+	  https://github.com/eaglesemanation/spectrometer_utils

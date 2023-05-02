@@ -29,6 +29,8 @@
             ];
           };
 
+          pkgs = nixpkgs.legacyPackages.${localSystem};
+
           pkgsX86_64LinuxStatic = import nixpkgs (commonCfg // {
             crossSystem.config = "x86_64-unknown-linux-musl";
           });
@@ -51,6 +53,10 @@
           packages = {
             inherit (legacyPackages.pkgsCross.${localSystem}) spectrometer_cli;
             default = packages.spectrometer_cli;
+          };
+
+          devShells = {
+            spectrometer_rpi = import ./sbc_config/shell.nix { inherit pkgs; };
           };
         }
       );
