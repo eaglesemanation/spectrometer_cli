@@ -6,3 +6,15 @@ config BR2_PACKAGE_SPECTROMETER_SBC
 	  CCD LCAM V06 board client used as a spectrometer
 
 	  https://github.com/eaglesemanation/spectrometer_utils
+
+if BR2_PACKAGE_SPECTROMETER_SBC
+
+config BR2_PACKAGE_SPECTROMETER_SBC_LASER_PIN
+	int "GPIO laser pin"
+	default "23"
+
+config BR2_PACKAGE_SPECTROMETER_SBC_BUTTON_PIN
+	int "GPIO button pin"
+	default "21"
+
+endif
