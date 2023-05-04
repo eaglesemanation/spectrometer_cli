@@ -1,38 +1,33 @@
 use std::{error::Error, thread, time::Duration};
 
-use rppal::gpio::{Gpio, Level};
+use log::{info, debug};
+use rppal::gpio::{Gpio, Level, Trigger};
+use ccd_lcamv06::{StdIoAdapter, IoAdapter};
 
 fn main() -> Result<(), Box<dyn Error>> {
+    env_logger::init();
+
+    // safety: parsed as u8 during compilation time
+    let laser_pin: u8 = std::env!("LASER_PIN").parse().unwrap();
+    let button_pin: u8 = std::env!("BUTTON_PIN").parse().unwrap();
+
     let gpio = Gpio::new()?;
 
-    let laser_pin: u8 = std::env!("LASER_PIN", "GPIO pin for laser is not defined").parse()?;
-    let button_pin: u8 = std::env!("BUTTON_PIN", "GPIO pin for button is not defined").parse()?;
-
     let mut laser = gpio.get(laser_pin)?.into_output();
-    let mut button = gpio.get(button_pin)?.into_input_pullup();
-
-    button.set_interrupt(rppal::gpio::Trigger::FallingEdge)?;
     laser.set_high();
+    let mut button = gpio.get(button_pin)?.into_input_pullup();
+    button.set_interrupt(Trigger::FallingEdge)?;
+    debug!("Initialized GPIO");
 
-    let mut count_low = 0;
+    let mut serial = serialport::new("/dev/ttyUSB0", 115200).timeout(Duration::from_millis(100)).open()?;
+    let ccd = StdIoAdapter::new(&mut serial).open_ccd();
+    debug!("Initialized CCD");
 
+    info!("Initialization complete");
     loop {
         button.poll_interrupt(false, None)?;
-        loop {
-            match button.read() {
-                Level::High => {
-                    count_low = 0;
-                    break;
-                },
-                Level::Low => count_low += 1,
-            }
-            if count_low > 10 {
-                laser.set_low();
-                thread::sleep(Duration::from_secs(3));
-                laser.set_high();
-                break
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
+        laser.set_low();
+        thread::sleep(Duration::from_millis(10));
+        laser.set_high();
     }
 }

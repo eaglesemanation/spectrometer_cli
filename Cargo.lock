@@ -1585,7 +1585,11 @@ dependencies = [
 name = "spectrometer_sbc"
 version = "0.1.0"
 dependencies = [
+ "ccd_lcamv06",
+ "env_logger",
+ "log",
  "rppal",
+ "serialport",
 ]
 
 [[package]]

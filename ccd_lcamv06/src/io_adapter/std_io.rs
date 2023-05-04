@@ -19,7 +19,7 @@ impl<IO: Read + Write> IoAdapter for StdIoAdapter<IO> {
 }
 
 impl<IO: Read + Write> StdIoAdapter<IO> {
-    pub fn new(io: T) -> Self {
+    pub fn new(io: IO) -> Self {
         StdIoAdapter { io }
     }
 }
