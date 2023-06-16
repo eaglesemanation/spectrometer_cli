@@ -1,6 +1,8 @@
 [package]
 name = "spectrometer_cli"
-version = "0.1.0"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
 edition = "2021"
 build = "build.rs"
 
@@ -11,11 +13,11 @@ clap = { version = "3.2", features = ["derive"] }
 num-traits = "0.2"
 simple-eyre = "0.3"
 termcolor = "1.1"
-serialport.workspace = true
-env_logger.workspace = true
-log.workspace = true
-plotters.workspace = true
-time.workspace = true
+log = "0.4"
+env_logger = "0.10"
+serialport = "4.2"
+plotters = "0.3"
+time = { version = "0.3", features = ["local-offset", "macros", "formatting"] }
 
 [build-dependencies]
 embed-resource = "1.7"

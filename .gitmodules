@@ -1,5 +1,4 @@
-[submodule "buildroot/buildroot"]
+[submodule "sbc_config/buildroot"]
 	path = sbc_config/buildroot
-	url = git://git.buildroot.net/buildroot
-[submodule "buildroot"]
-	branch = 2022.11.3
+	branch = 2023.05-rust-wasm
+	url = https://github.com/eaglesemanation/spectrometer_buildroot.git

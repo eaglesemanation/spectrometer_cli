@@ -1,6 +1,7 @@
 config BR2_PACKAGE_SPECTROMETER_SBC
 	bool "spectrometer_sbc"
 	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+    select BR2_PACKAGE_HOST_WASM_PACK
 	select BR2_PACKAGE_HOST_RUSTC
     select BR2_PACKAGE_EUDEV
 	help

@@ -1,4 +1,13 @@
 fn main() {
+    match dotenvy::dotenv() {
+        Ok(_) => {},
+        Err(err) => {
+            if !err.not_found() {
+                panic!("{}", err)
+            }
+        }
+    }
+
     let laser_pin: u8 = std::env::var("LASER_PIN")
         .expect("LASER_PIN env var is required")
         .parse()

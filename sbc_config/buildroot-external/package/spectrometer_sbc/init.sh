@@ -2,8 +2,7 @@
 
 DAEMON="spectrometer_sbc"
 PIDFILE="/var/run/$DAEMON.pid"
-
-SPECTROMETER_SBC_ARGS=""
+DAEMON_ARGS=""
 
 # shellcheck source=/dev/null
 [ -r "/etc/default/$DAEMON" ] && . "/etc/default/$DAEMON"
@@ -12,7 +11,7 @@ start() {
     printf 'Starting %s: ' "$DAEMON"
     # shellcheck disable=SC2086 # we need the word splitting
     start-stop-daemon -b -m -S -q -p "$PIDFILE" -x "/usr/bin/$DAEMON" \
-            -- $SPECTROMETER_SBC_ARGS
+            -- $DAEMON_ARGS
     status=$?
     if [ "$status" -eq 0 ]; then
             echo "OK"

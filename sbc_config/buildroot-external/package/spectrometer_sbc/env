@@ -1,0 +1,7 @@
+export LEPTOS_OUTPUT_NAME='spectrometer_sbc'
+export LEPTOS_SITE_ROOT='/usr/share/spectrometer_sbc'
+export LEPTOS_SITE_PKG_DIR='pkg'
+export LEPTOS_SITE_ADDR='0.0.0.0:3000'
+export SERVER_FN_OVERRIDE_KEY='8306904707'
+
+export SPECTROMETER_SBC_LOG_PATH='/var/log/spectrometer_sbc.log'

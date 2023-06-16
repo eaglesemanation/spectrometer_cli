@@ -5,13 +5,12 @@ members = [
     "spectrometer_sbc"
 ]
 exclude = ["sbc_config"]
+resolver = "2"
 
-[workspace.dependencies]
-log = "0.4"
-env_logger = "0.10"
-serialport = "4.2"
-plotters = "0.3"
-time = { version = "0.3", features = ["local-offset", "macros", "formatting"] }
+[workspace.package]
+version = "0.1.0"
+license = "MIT"
+authors = ["Vladimir Romashchenko <eaglesemanation@gmail.com>"]
 
 [profile.release]
 lto = true # Link time optimization

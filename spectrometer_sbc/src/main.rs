@@ -1,33 +1,71 @@
-use std::{error::Error, thread, time::Duration};
+#[cfg(feature = "ssr")]
+#[tokio::main]
+async fn main() {
+    use axum::{extract::Extension, routing::post, Router};
+    use leptos::*;
+    use leptos_axum::{generate_route_list, LeptosRoutes};
+    use log::LevelFilter;
+    use log4rs::append::console::ConsoleAppender;
+    use log4rs::append::file::FileAppender;
+    use log4rs::config::{Appender, Root};
+    use spectrometer_sbc::app::*;
+    use spectrometer_sbc::fileserv::init_with_level;
+    use spectrometer_sbc::server_funcs;
+    use std::sync::Arc;
 
-use log::{info, debug};
-use rppal::gpio::{Gpio, Level, Trigger};
-use ccd_lcamv06::{StdIoAdapter, IoAdapter};
+    let stdout = ConsoleAppender::builder().build();
+    let mut log_root = Root::builder().appender("stdout");
+    let mut log_config =
+        log4rs::Config::builder().appender(Appender::builder().build("stdout", Box::new(stdout)));
 
-fn main() -> Result<(), Box<dyn Error>> {
-    env_logger::init();
-
-    // safety: parsed as u8 during compilation time
-    let laser_pin: u8 = std::env!("LASER_PIN").parse().unwrap();
-    let button_pin: u8 = std::env!("BUTTON_PIN").parse().unwrap();
-
-    let gpio = Gpio::new()?;
-
-    let mut laser = gpio.get(laser_pin)?.into_output();
-    laser.set_high();
-    let mut button = gpio.get(button_pin)?.into_input_pullup();
-    button.set_interrupt(Trigger::FallingEdge)?;
-    debug!("Initialized GPIO");
-
-    let mut serial = serialport::new("/dev/ttyUSB0", 115200).timeout(Duration::from_millis(100)).open()?;
-    let ccd = StdIoAdapter::new(&mut serial).open_ccd();
-    debug!("Initialized CCD");
-
-    info!("Initialization complete");
-    loop {
-        button.poll_interrupt(false, None)?;
-        laser.set_low();
-        thread::sleep(Duration::from_millis(10));
-        laser.set_high();
+    match std::env::var("SPECTROMETER_SBC_LOG_PATH") {
+        Ok(log_file_path) => {
+            let file = FileAppender::builder().build(log_file_path).unwrap();
+            log_config = log_config.appender(Appender::builder().build("file", Box::new(file)));
+            log_root = log_root.appender("file");
+        }
+        Err(std::env::VarError::NotPresent) => {}
+        Err(err) => {
+            panic!("{}", err);
+        }
     }
+
+    let _ =
+        log4rs::init_config(log_config.build(log_root.build(LevelFilter::Info)).unwrap()).unwrap();
+
+    server_funcs::register().unwrap();
+
+    log::info!("Registered server functions: {:?}", leptos_server::server_fns_by_path());
+
+    // Setting get_configuration(None) means we'll be using cargo-leptos's env values
+    // For deployment these variables are:
+    // <https://github.com/leptos-rs/start-axum#executing-a-server-on-a-remote-machine-without-the-toolchain>
+    // Alternately a file can be specified such as Some("Cargo.toml")
+    // The file would need to be included with the executable when moved to deployment
+    let conf = get_configuration(None).await.unwrap();
+    let leptos_options = conf.leptos_options;
+    let addr = leptos_options.site_addr;
+    let routes = generate_route_list(|cx| view! { cx, <App/> }).await;
+
+    // build our application with a route
+    let app = Router::new()
+        .route("/api/*fn_name", post(leptos_axum::handle_server_fns))
+        .leptos_routes(leptos_options.clone(), routes, |cx| view! { cx, <App/> })
+        .fallback(init_with_level)
+        .layer(Extension(Arc::new(leptos_options)));
+
+    // run our app with hyper
+    // `axum::Server` is a re-export of `hyper::Server`
+    log!("listening on http://{}", &addr);
+    axum::Server::bind(&addr)
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
+}
+
+#[cfg(not(feature = "ssr"))]
+pub fn main() {
+    // no client-side main function
+    // unless we want this to work with e.g., Trunk for a purely client-side app
+    // see lib.rs for hydration function instead
 }

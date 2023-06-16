@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+
+set -e
+set -o pipefail
+
+while getopts "b:" OPT; do
+    case "${OPT}" in
+    b)  build_dir="${OPTARG}";;
+    :)  error "option '%s' expects a mandatory argument\n" "${OPTARG}";;
+    \?) error "unknown option '%s'\n" "${OPTARG}";;
+    esac
+done
+
+pushd "${build_dir}" > /dev/null
+
+# Create the local .cargo/config with vendor info
+mkdir -p .cargo/
+mkdir -p "${CARGO_HOME}"
+flock "${CARGO_HOME}"/.br-lock \
+cargo vendor \
+    --manifest-path ${BR_CARGO_MANIFEST_PATH-Cargo.toml} \
+    --locked VENDOR \
+    > .cargo/config
+
+printf '(note: .cargo/config.toml automatically updated by Buildroot)\n\n'
+
+popd > /dev/null

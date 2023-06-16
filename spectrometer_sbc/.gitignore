@@ -1,0 +1,4 @@
+node_modules/
+end2end/playwright-report
+style/output.css
+.env
