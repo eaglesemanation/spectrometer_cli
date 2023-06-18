@@ -15,6 +15,7 @@ SPECTROMETER_SBC_SITE_METHOD = local
 SPECTROMETER_SBC_OVERRIDE_SRCDIR_RSYNC_EXCLUSIONS = \
 	--exclude sbc_config --exclude *.nix
 
+# TODO: Add tailwindcss as a host dependency instead of relying on Nix to provide it
 SPECTROMETER_SBC_DEPENDENCIES = udev host-wasm-pack
 
 # Default cargo post-processing expects sources to be archived, using custom scipt to avoid that
@@ -47,7 +48,8 @@ define SPECTROMETER_SBC_BUILD_CMDS
 		cargo build \
 			$(if $(BR2_ENABLE_DEBUG),,--release) \
 			--offline --manifest-path Cargo.toml --locked \
-			--no-default-features --features=ssr && \
+			--no-default-features --features=ssr
+	cd $(SPECTROMETER_SBC_SRCDIR) && \
 	$(TARGET_MAKE_ENV) \
 		$(TARGET_CONFIGURE_OPTS) \
 		$(PKG_CARGO_ENV) \
@@ -58,6 +60,8 @@ define SPECTROMETER_SBC_BUILD_CMDS
 			-- \
 			--offline --manifest-path Cargo.toml --locked \
 			--no-default-features --features=hydrate
+	cd $(SPECTROMETER_SBC_SRCDIR) && \
+		tailwindcss --input style/input.css --output style/output.css
 endef
 
 # cargo-package uses `cargo install`, which only installs binaries. Copy WASM manually 
@@ -69,6 +73,7 @@ define SPECTROMETER_SBC_INSTALL_WASM
 		fixed_file="$$(echo $$bg_file | sed -En 's/(.*)_bg(.*)/\1\2/p')" ; \
 		mv $$bg_file $$fixed_file ; \
 	done
+	$(Q)cp $(SPECTROMETER_SBC_SRCDIR)/style/output.css $(TARGET_DIR)/usr/share/spectrometer_sbc/pkg/spectrometer_sbc.css
 endef
 SPECTROMETER_SBC_POST_BUILD_HOOKS += SPECTROMETER_SBC_INSTALL_WASM
 

@@ -11,7 +11,7 @@
     python3 cvs git mercurial rsync subversion
     asciidoc w3m ncurses5 pkg-config
     # Not listed in docs
-    libxcrypt expat
+    libxcrypt expat nodePackages.tailwindcss
   ]);
   extraOutputsToInstall = [ "dev" ];
 
