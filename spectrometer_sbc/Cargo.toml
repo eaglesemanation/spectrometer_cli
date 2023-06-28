@@ -9,21 +9,21 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-ccd_lcamv06 = { path = "../ccd_lcamv06", features = ["std"], optional = true }
+ccd_lcamv06 = { path = "../ccd_lcamv06", features = ["std"] }
 rppal = { version = "0.14", optional = true }
 serialport = { version = "4.2", optional = true, default-features = false }
 axum = { version = "0.6", optional = true }
 console_error_panic_hook = "0.1"
 console_log = "1"
 cfg-if = "1"
-leptos = { version = "0.3", default-features = false, features = ["serde"] }
-leptos_axum = { version = "0.3", optional = true }
-leptos_meta = { version = "0.3", default-features = false }
-leptos_router = { version = "0.3", default-features = false }
+leptos = { git = "https://github.com/leptos-rs/leptos.git", branch = "main", features = ["serde"] }
+leptos_axum = { git = "https://github.com/leptos-rs/leptos.git", branch = "main", optional = true }
+leptos_meta = { git = "https://github.com/leptos-rs/leptos.git", branch = "main" }
+leptos_router = { git = "https://github.com/leptos-rs/leptos.git", branch = "main" }
 tokio = { version = "1.25", optional = true }
 tower = { version = "0.4", optional = true }
 tower-http = { version = "0.4", features = ["fs"], optional = true }
-wasm-bindgen = "=0.2.86"
+wasm-bindgen = "=0.2.84"
 thiserror = "1.0"
 tracing = { version = "0.1", optional = true }
 http = "0.2"
@@ -32,27 +32,34 @@ serde = {version = "1.0", features = ["derive"]}
 uuid = {version = "1.3", features = ["v4", "js"]}
 log = "0.4"
 log4rs = {version = "1.2", optional = true}
+web-sys = {version = "0.3", features = ["File", "FileList", "HtmlInputElement", "Blob"]}
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
 
 [build-dependencies]
 dotenvy = "0.15"
 
 [features]
-default=["ssr"]
+default=["ssr", "nightly"]
 hydrate = ["leptos/hydrate", "leptos_meta/hydrate", "leptos_router/hydrate"]
 ssr = [
-    "dep:axum", 
-    "dep:ccd_lcamv06",
+    "dep:axum",
     "dep:rppal",
     "dep:serialport",
-    "dep:tokio", 
-    "dep:tower", 
-    "dep:tower-http", 
-    "dep:leptos_axum", 
-    "leptos/ssr", 
-    "leptos_meta/ssr", 
-    "leptos_router/ssr", 
+    "dep:tokio",
+    "dep:tower",
+    "dep:tower-http",
+    "dep:leptos_axum",
+    "leptos/ssr",
+    "leptos_meta/ssr",
+    "leptos_router/ssr",
     "dep:tracing",
     "dep:log4rs"
+]
+nightly = [
+    "leptos/nightly",
+    "leptos_meta/nightly",
+    "leptos_router/nightly"
 ]
 
 [package.metadata.cargo-all-features]
@@ -101,5 +108,5 @@ watch = false
 
 # The environment Leptos will run in, usually either "DEV" or "PROD"
 env = "DEV"
-bin-features = ["ssr"]
-lib-features = ["hydrate"]
+bin-features = ["ssr", "nightly"]
+lib-features = ["hydrate", "nightly"]

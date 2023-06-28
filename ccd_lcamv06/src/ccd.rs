@@ -184,7 +184,7 @@ where
     }
 
     /// Takes `count` frames from CCD and pushes them into buffer, or exits early on an error
-    pub fn get_frames<B: Extend<Frame>>(&mut self, buf: &mut B, count: usize) -> Result<()> {
+    pub fn extend_with_frames<B: Extend<Frame>>(&mut self, buf: &mut B, count: usize) -> Result<()> {
         log::debug!("Sending a ContinuousRead package");
         self.send_package(Command::ContinuousRead)?;
         let mut s = guard(self, |s| {

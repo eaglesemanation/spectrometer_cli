@@ -1,7 +1,7 @@
 #[cfg(feature = "ssr")]
 #[tokio::main]
 async fn main() {
-    use axum::{extract::Extension, routing::post, Router};
+    use axum::{routing::post, Router};
     use leptos::*;
     use leptos_axum::{generate_route_list, LeptosRoutes};
     use log::LevelFilter;
@@ -9,9 +9,7 @@ async fn main() {
     use log4rs::append::file::FileAppender;
     use log4rs::config::{Appender, Root};
     use spectrometer_sbc::app::*;
-    use spectrometer_sbc::fileserv::init_with_level;
-    use spectrometer_sbc::server_funcs;
-    use std::sync::Arc;
+    use spectrometer_sbc::fallback::file_and_error_handler;
 
     let stdout = ConsoleAppender::builder().build();
     let mut log_root = Root::builder().appender("stdout");
@@ -33,8 +31,6 @@ async fn main() {
     let _ =
         log4rs::init_config(log_config.build(log_root.build(LevelFilter::Info)).unwrap()).unwrap();
 
-    server_funcs::register().unwrap();
-
     log::info!("Registered server functions: {:?}", leptos_server::server_fns_by_path());
 
     // Setting get_configuration(None) means we'll be using cargo-leptos's env values
@@ -50,9 +46,9 @@ async fn main() {
     // build our application with a route
     let app = Router::new()
         .route("/api/*fn_name", post(leptos_axum::handle_server_fns))
-        .leptos_routes(leptos_options.clone(), routes, |cx| view! { cx, <App/> })
-        .fallback(init_with_level)
-        .layer(Extension(Arc::new(leptos_options)));
+        .leptos_routes(&leptos_options, routes, |cx| view! { cx, <App/> })
+        .fallback(file_and_error_handler)
+        .with_state(leptos_options);
 
     // run our app with hyper
     // `axum::Server` is a re-export of `hyper::Server`

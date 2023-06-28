@@ -48,7 +48,7 @@ define SPECTROMETER_SBC_BUILD_CMDS
 		cargo build \
 			$(if $(BR2_ENABLE_DEBUG),,--release) \
 			--offline --manifest-path Cargo.toml --locked \
-			--no-default-features --features=ssr
+			--no-default-features --features=ssr,nightly
 	cd $(SPECTROMETER_SBC_SRCDIR) && \
 	$(TARGET_MAKE_ENV) \
 		$(TARGET_CONFIGURE_OPTS) \
@@ -59,7 +59,7 @@ define SPECTROMETER_SBC_BUILD_CMDS
 			$(if $(BR2_ENABLE_DEBUG),--dev,--release) \
 			-- \
 			--offline --manifest-path Cargo.toml --locked \
-			--no-default-features --features=hydrate
+			--no-default-features --features=hydrate,nightly
 	cd $(SPECTROMETER_SBC_SRCDIR) && \
 		tailwindcss --input style/input.css --output style/output.css
 endef

@@ -3,12 +3,11 @@
 use cfg_if::cfg_if;
 pub mod app;
 pub mod error_template;
-pub mod fileserv;
-pub mod echart;
+pub mod fallback;
+pub mod components;
 
 cfg_if! { 
 if #[cfg(feature = "ssr")] {
-    pub mod server_funcs;
     pub mod gpio;
 } else if #[cfg(feature = "hydrate")] {
     use leptos::*;

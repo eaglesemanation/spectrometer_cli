@@ -67,7 +67,7 @@ fn get_multiple_readings(conf: &MultiReadingConf) -> Result<()> {
     let mut ccd = conf.serial.open_ccd()?;
     let mut frames: Vec<_> = Vec::with_capacity(conf.count);
 
-    ccd.get_frames(&mut frames, conf.count)?;
+    ccd.extend_with_frames(&mut frames, conf.count)?;
     conf.output.write_frames(&frames)?;
 
     Ok(())
