@@ -35,6 +35,11 @@ log4rs = {version = "1.2", optional = true}
 web-sys = {version = "0.3", features = ["File", "FileList", "HtmlInputElement", "Blob"]}
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
+anyhow = "1.0"
+futures-util = "0.3"
+tokio-stream = { version = "0.1", features = ["sync"] }
+gloo-net = "0.3"
+futures = "0.3"
 
 [build-dependencies]
 dotenvy = "0.15"

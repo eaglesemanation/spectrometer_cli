@@ -5,7 +5,6 @@ use ccd_lcamv06::{IoAdapter, StdIoAdapter};
 use leptos::{html::Input, *};
 use leptos_meta::*;
 use leptos_router::*;
-use log::info;
 
 struct IOIgnoreWrite<T: Read>(T);
 
@@ -50,6 +49,7 @@ pub fn App(cx: Scope) -> impl IntoView {
 
 #[server(ToggleLaser, "/api")]
 async fn toggle_laser(cx: Scope) -> Result<(), ServerFnError> {
+    /*
     use crate::gpio;
 
     let pins = gpio::get_pins().map_err(|err| ServerFnError::ServerError(err.to_string()))?;
@@ -59,14 +59,13 @@ async fn toggle_laser(cx: Scope) -> Result<(), ServerFnError> {
         .map_err(|err| ServerFnError::ServerError(err.to_string()))?;
     info!("Toggling LED");
     led_pin.toggle();
+    */
 
     Ok(())
 }
 
 #[component]
 fn HomePage(cx: Scope) -> impl IntoView {
-    let serv_toggle_laser = create_server_action::<ToggleLaser>(cx);
-
     let (chart_data, set_chart_data) = create_signal(cx, vec![]);
 
     let chart_view = move || {
@@ -92,13 +91,7 @@ fn HomePage(cx: Scope) -> impl IntoView {
     };
 
     view! { cx,
-        <button
-            on:click=move |_| { serv_toggle_laser.dispatch(ToggleLaser{}); }
-            class="bg-rose-600 disabled:bg-gray-400 hover:bg-rose-800 p-3 text-white rounded-lg"
-            disabled=serv_toggle_laser.pending()
-        >
-            "Toggle LED"
-        </button>
+        <Gpio/>
         <SerialPortReader set_frame=set_chart_data/>
         <FileReader set_frame=set_chart_data/>
         <Transition fallback=move || {} >
@@ -106,6 +99,53 @@ fn HomePage(cx: Scope) -> impl IntoView {
                 {chart_view}
             </ErrorBoundary>
         </Transition>
+    }
+}
+
+#[component]
+fn Gpio(cx: Scope) -> impl IntoView {
+    let serv_toggle_laser = create_server_action::<ToggleLaser>(cx);
+
+    #[cfg(not(feature = "ssr"))]
+    let trigger_state = {
+        use tokio_stream::StreamExt;
+
+        let mut source = gloo_net::eventsource::futures::EventSource::new("/api/sse/trigger")
+            .expect("couldn't connect to SSE stream");
+        let s = create_signal_from_stream(
+            cx,
+            source
+                .subscribe("message")
+                .unwrap()
+                .map(|value| match value {
+                    Ok(value) => value.1.data().as_string().expect("expected string value"),
+                    Err(_) => "false".to_string(),
+                }),
+        );
+
+        on_cleanup(cx, move || source.close());
+        s
+    };
+
+    #[cfg(feature = "ssr")]
+    let (trigger_state, _) = create_signal(cx, None::<String>);
+
+    view! { cx,
+        <div
+            class=move || {
+                format!("m-3 flex h-10 w-10 items-center justify-center rounded-full {}", match trigger_state() {
+                    Some(val) if val == "true" => "bg-green-600",
+                    _ => "bg-green-950"
+                })
+            }
+        ></div>
+        <button
+            on:click=move |_| { serv_toggle_laser.dispatch(ToggleLaser{}); }
+            class="bg-rose-600 disabled:bg-gray-400 hover:bg-rose-800 p-3 text-white rounded-lg"
+            disabled=serv_toggle_laser.pending()
+        >
+            "Toggle LED"
+        </button>
     }
 }
 

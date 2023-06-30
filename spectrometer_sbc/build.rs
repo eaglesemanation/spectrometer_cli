@@ -12,15 +12,15 @@ fn main() {
         .expect("LASER_PIN env var is required")
         .parse()
         .expect("LASER_PIN needs to be an integer");
-    let button_pin: u8 = std::env::var("BUTTON_PIN")
-        .expect("BUTTON_PIN env var is required")
+    let button_pin: u8 = std::env::var("TRIGGER_PIN")
+        .expect("TRIGGER_PIN env var is required")
         .parse()
-        .expect("BUTTON_PIN needs to be an integer");
+        .expect("TRIGGER_PIN needs to be an integer");
 
     if laser_pin == button_pin {
-        panic!("LASER_PIN and BUTTON_PIN need to be different");
+        panic!("LASER_PIN and TRIGGER_PIN need to be different");
     }
 
     println!("cargo:rustc-env=LASER_PIN={}", laser_pin);
-    println!("cargo:rustc-env=BUTTON_PIN={}", button_pin);
+    println!("cargo:rustc-env=TRIGGER_PIN={}", button_pin);
 }
