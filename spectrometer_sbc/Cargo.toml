@@ -16,10 +16,10 @@ axum = { version = "0.6", optional = true }
 console_error_panic_hook = "0.1"
 console_log = "1"
 cfg-if = "1"
-leptos = { git = "https://github.com/leptos-rs/leptos.git", branch = "main", features = ["serde"] }
-leptos_axum = { git = "https://github.com/leptos-rs/leptos.git", branch = "main", optional = true }
-leptos_meta = { git = "https://github.com/leptos-rs/leptos.git", branch = "main" }
-leptos_router = { git = "https://github.com/leptos-rs/leptos.git", branch = "main" }
+leptos = { version = "0.4", features = ["serde"] }
+leptos_axum = { version = "0.4", optional = true }
+leptos_meta = "0.4"
+leptos_router = "0.4"
 tokio = { version = "1.25", optional = true }
 tower = { version = "0.4", optional = true }
 tower-http = { version = "0.4", features = ["fs"], optional = true }

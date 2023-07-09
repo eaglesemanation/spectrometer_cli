@@ -49,17 +49,15 @@ pub fn App(cx: Scope) -> impl IntoView {
 
 #[server(ToggleLaser, "/api")]
 async fn toggle_laser(cx: Scope) -> Result<(), ServerFnError> {
-    /*
-    use crate::gpio;
+    use crate::state::AppState;
 
-    let pins = gpio::get_pins().map_err(|err| ServerFnError::ServerError(err.to_string()))?;
-    let mut led_pin = pins
-        .laser_pin
-        .lock()
-        .map_err(|err| ServerFnError::ServerError(err.to_string()))?;
-    info!("Toggling LED");
-    led_pin.toggle();
-    */
+    let Some(state) = use_context::<AppState>(cx) else {
+        return Err(ServerFnError::ServerError(
+            "Could not get app state".to_string(),
+        ));
+    };
+    let mut laser = state.gpio.laser.lock()?;
+    laser.toggle();
 
     Ok(())
 }
@@ -216,11 +214,8 @@ fn SerialPortReader(cx: Scope, set_frame: WriteSignal<Vec<f64>>) -> impl IntoVie
                 class="bg-amber-600 disabled:bg-gray-400 hover:bg-amber-800 p-3 m-3 text-white rounded-lg"
                 disabled=serv_get_single_reading.pending()
                 on:click=move |_| {
-                    match selected_port() {
-                        Some(port) => {
-                            serv_get_single_reading.dispatch(GetSingleReading{port});
-                        },
-                        None => {}
+                    if let Some(port) = selected_port() {
+                        serv_get_single_reading.dispatch(GetSingleReading{port});
                     }
                 }
             >

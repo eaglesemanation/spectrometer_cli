@@ -1,29 +1,48 @@
 cfg_if::cfg_if! {
 if #[cfg(feature = "ssr")] {
     use axum::{
-        routing::{get, post},
+        routing::{get},
         Router,
     };
+    use spectrometer_sbc::state::AppState;
     use tokio_stream::{wrappers::WatchStream, StreamExt};
     use futures::stream::{Stream};
-    use axum::{response::{Sse, sse::{KeepAlive, Event}}, extract::State};
+    use axum::{response::{Sse, sse::{KeepAlive, Event}}, extract::State, body::Body as AxumBody};
+    use axum::response::Response;
     use leptos::*;
     use leptos_axum::{generate_route_list, LeptosRoutes};
+    use leptos_axum::handle_server_fns_with_context;
+    use axum::{extract::{Path, RawQuery}, response::IntoResponse};
+    use http::{HeaderMap, Request};
     use log::LevelFilter;
     use log4rs::append::console::ConsoleAppender;
     use log4rs::append::file::FileAppender;
     use log4rs::config::{Appender, Root};
     use spectrometer_sbc::app::*;
     use spectrometer_sbc::fallback::file_and_error_handler;
-    use spectrometer_sbc::gpio::Pins;
     use std::convert::Infallible;
     use rppal::gpio::Level;
-    use tokio::sync::watch::Receiver;
+    use spectrometer_sbc::gpio::GpioState;
     use tokio::select;
+
+    async fn server_fn_handler(State(app_state): State<AppState>, path: Path<String>, headers: HeaderMap, raw_query: RawQuery, request: Request<AxumBody>) -> impl IntoResponse {
+        handle_server_fns_with_context(path, headers, raw_query, move |cx| {
+            provide_context(cx, app_state.clone());
+        }, request).await
+    }
+
+    async fn leptos_routes_handler(State(app_state): State<AppState>, req: Request<AxumBody>) -> Response {
+        let handler = leptos_axum::render_app_to_stream_with_context(app_state.leptos_options.clone(),
+            move |cx| {
+                provide_context(cx, app_state.clone());
+            },
+            |cx| view! { cx, <App/> }
+        );
+        handler(req).await.into_response()
+    }
 
     #[tokio::main]
     async fn main() -> anyhow::Result<()> {
-
         let stdout = ConsoleAppender::builder().build();
         let mut log_root = Root::builder().appender("stdout");
         let mut log_config =
@@ -48,7 +67,7 @@ if #[cfg(feature = "ssr")] {
             leptos_server::server_fns_by_path()
         );
 
-        let pins = Pins::init()?;
+        let (gpio, gpio_workers) = GpioState::init()?;
 
         // Setting get_configuration(None) means we'll be using cargo-leptos's env values
         // For deployment these variables are:
@@ -60,31 +79,36 @@ if #[cfg(feature = "ssr")] {
         let addr = leptos_options.site_addr;
         let routes = generate_route_list(|cx| view! { cx, <App/> }).await;
 
+        let state = AppState {
+            gpio,
+            leptos_options
+        };
+
         // build our application with a route
         let app = Router::new()
-            .route("/api/sse/trigger", get(trigger_state_handler).with_state(pins.trigger_state))
-            .route("/api/*fn_name", post(leptos_axum::handle_server_fns))
-            .leptos_routes(&leptos_options, routes, |cx| view! { cx, <App/> })
+            .route("/api/sse/trigger", get(trigger_state_handler))
+            .route("/api/*fn_name", get(server_fn_handler).post(server_fn_handler))
+            .leptos_routes_with_handler(routes, leptos_routes_handler)
             .fallback(file_and_error_handler)
-            .with_state(leptos_options);
+            .with_state(state);
 
         // run our app with hyper
         // `axum::Server` is a re-export of `hyper::Server`
         log::info!("listening on http://{}", &addr);
         let server = axum::Server::bind(&addr)
             .serve(app.into_make_service());
-        let trigger_worker = pins.trigger_worker;
 
         select! {
             res = server => {res?},
-            res = trigger_worker => {res??},
+            res = gpio_workers.trigger_worker => {res??},
         }
 
         Ok(())
     }
 
-    async fn trigger_state_handler(State(trigger_state): State<Receiver<Level>>) -> Sse<impl Stream<Item = Result<Event, Infallible>>>  {
-        let stream = WatchStream::new(trigger_state).map(|state| {
+    #[axum::debug_handler]
+    async fn trigger_state_handler(State(gpio): State<GpioState>) -> Sse<impl Stream<Item = Result<Event, Infallible>>>  {
+        let stream = WatchStream::new(gpio.trigger).map(|state| {
             Ok(Event::default().json_data(state == Level::High).unwrap(/* safety: bool should always serialize */))
         });
         Sse::new(stream).keep_alive(KeepAlive::default())

@@ -1,14 +1,13 @@
-#![feature(once_cell_try)]
-
 use cfg_if::cfg_if;
 pub mod app;
+pub mod components;
 pub mod error_template;
 pub mod fallback;
-pub mod components;
 
-cfg_if! { 
+cfg_if! {
 if #[cfg(feature = "ssr")] {
     pub mod gpio;
+    pub mod state;
 } else if #[cfg(feature = "hydrate")] {
     use leptos::*;
     use wasm_bindgen::prelude::wasm_bindgen;
